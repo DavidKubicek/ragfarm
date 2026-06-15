@@ -247,3 +247,8 @@ branches to merge.
   is strictly sequential with dependency-gated steps; parallel workers would
   create concurrent committers that the /tmp/ragfarm.lock guard cannot see.
   Execute every step yourself in this single session.
+- Run as user `dave`, never root. Use `sudo` ONLY for the specific privileged
+  actions a step requires (package installs, driver load in step 01, Vulkan dev
+  packages in step 02). Never `sudo` an entire script or a git/python/llama-server
+  command. Never run the session itself under root. If a step seems to need broad
+  root access beyond package/driver install, treat that as a BLOCKED and ask Dave.
