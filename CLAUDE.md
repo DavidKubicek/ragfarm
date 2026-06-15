@@ -243,3 +243,7 @@ branches to merge.
 - Never resolve a git conflict yourself — abort and `BLOCKED:` it for Dave.
 - All work lands on `main`; `git pull --rebase` before every push.
 - All timestamps are UTC (the `/tmp/ragfarm.lock` epoch is UTC by definition).
+- Do NOT spawn subagents (Task tool) or agent teams for build steps. The build
+  is strictly sequential with dependency-gated steps; parallel workers would
+  create concurrent committers that the /tmp/ragfarm.lock guard cannot see.
+  Execute every step yourself in this single session.
