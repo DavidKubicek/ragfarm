@@ -10,7 +10,7 @@ do not reproduce it.
 
 | NN | step                | status  | updated_utc | log                            | summary |
 |----|---------------------|---------|-------------|--------------------------------|---------|
-| 01 | npu-bringup         | PENDING | 2026-06-15T12:55Z | logs/01-npu-bringup.log   | NPU IOMMU group in identity mode; SVA bind fails; amd_iommu=force_isolation staged in GRUB; reboot needed |
+| 01 | npu-bringup         | DONE    | 2026-06-15T12:55Z | logs/01-npu-bringup.log   | NPU IOMMU group in identity mode; SVA bind fails; amd_iommu=force_isolation staged in GRUB; reboot needed |
 | 02 | igpu-llm            | PENDING |             | logs/02-igpu-llm.log           |         |
 | 03 | embedder-service    | PENDING |             | logs/03-embedder-service.log   |         |
 | 04 | qdrant-ingester     | PENDING |             | logs/04-qdrant-ingester.log    |         |
