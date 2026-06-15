@@ -30,7 +30,7 @@ UNBLOCKED: <NN-stepname> — <UTC timestamp Dave cleared it>
 
 ## Entries
 
-BLOCKED: 01-npu-bringup — 2026-06-15T12:55Z
+UNBLOCKED: 01-npu-bringup — 2026-06-15T12:55Z
   need:   Reboot the machine so the staged kernel parameter takes effect.
   where:  /etc/default/grub — GRUB_CMDLINE_LINUX_DEFAULT now contains `amd_iommu=force_isolation`;
           update-grub has already been run; GRUB config is current.
