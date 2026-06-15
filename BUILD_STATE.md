@@ -11,7 +11,7 @@ do not reproduce it.
 | NN | step                | status  | updated_utc | log                            | summary |
 |----|---------------------|---------|-------------|--------------------------------|---------|
 | 01 | npu-bringup         | DONE    | 2026-06-15T19:10Z | logs/01-npu-bringup.log   | DKMS xrt-amdxdna 1.0.0, pgtbl_v2+iommu=on, RyzenAI-npu4, Test Finished |
-| 02 | igpu-llm            | PENDING |             | logs/02-igpu-llm.log           |         |
+| 02 | igpu-llm            | DONE    | 2026-06-15T20:05Z | logs/02-igpu-llm.log      | llama.cpp+Vulkan built, Qwen2.5-7B-Instruct Q4_K_M loaded, gate passed (Pong! at ~11.8 tok/s) |
 | 03 | embedder-service    | PENDING |             | logs/03-embedder-service.log   |         |
 | 04 | qdrant-ingester     | PENDING |             | logs/04-qdrant-ingester.log    |         |
 | 05 | mcp-placement       | PENDING |             | logs/05-mcp-placement.log      |         |

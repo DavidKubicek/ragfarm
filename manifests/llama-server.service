@@ -4,9 +4,9 @@ Description=llama.cpp server (Qwen2.5-7B-Instruct, Vulkan/iGPU)
 After=network-online.target
 [Service]
 User=dave
-WorkingDirectory=/opt/ragfarm/llama.cpp
-ExecStart=/opt/ragfarm/llama.cpp/build/bin/llama-server \
-  -m /opt/ragfarm/models/gguf/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
+WorkingDirectory=/home/dave/llama.cpp
+ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
+  -m /home/dave/ragfarm/models/gguf/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf \
   --host 127.0.0.1 --port 8080 -ngl 999 -c 16384 --jinja \
   --alias qwen2.5-7b-instruct
 Restart=on-failure
