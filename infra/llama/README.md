@@ -5,7 +5,7 @@ is unofficial on gfx1150). This serves an OpenAI-compatible API with tool-callin
 
 ## Build (Vulkan backend)
 ```bash
-sudo apt-get install -y libvulkan-dev vulkan-tools glslc cmake build-essential git
+sudo apt-get install -y libvulkan-dev vulkan-tools glslc cmake build-essential git spirv-headers libshaderc-dev
 vulkaninfo | grep -i "deviceName"   # expect Radeon 890M / RADV GFX1150
 
 git clone https://github.com/ggml-org/llama.cpp
