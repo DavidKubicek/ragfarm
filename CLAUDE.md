@@ -100,27 +100,60 @@ these files do.
 - `logs/<NN-stepname>.log` — raw stdout+stderr per step. Bulk output goes here,
   never into BUILD_STATE.md, PROGRESS.md, or your chat reply.
 
+The repo is shared between this agent and Dave's IDE, and is the sync channel
+between them. To keep that safe without branches or merges, two more mechanisms
+apply, both defined inline in the flow below:
+- `/tmp/ragfarm.lock` — a local-only presence heartbeat (NOT in the repo, never
+  committed). It holds a Unix epoch timestamp while an agent is active, or the
+  literal word `IDLE` on clean exit. Dave checks it on the target before editing,
+  to confirm no agent is live. You refresh it as you work.
+- Git sync on `main` — single branch, no feature branches, no merges. You commit
+  and push your own changes, and `pull --rebase` before every push so you never
+  clobber a change Dave pushed while idle.
+
 ### On session start
-1. Read `BUILD_STATE.md`. Identify the first step whose status is not `DONE`.
-2. Read `PROGRESS.md`. If any entry for a step is still `BLOCKED:`, that step is
+1. Take the presence heartbeat:
+   `date +%s > /tmp/ragfarm.lock`
+   Refresh it (same command) at the start of every step, so the timestamp stays
+   current while you work. Dave treats a timestamp older than ~5 minutes, or the
+   value `IDLE`, as "no agent active, safe to edit."
+2. Integrate anything Dave pushed while you were off:
+   `git pull --rebase origin main`
+   If this reports a CONFLICT, do NOT resolve it: `git rebase --abort`, append a
+   `BLOCKED:` entry to `PROGRESS.md` naming the conflicted file(s), and stop until
+   Dave clears it on the laptop.
+3. Read `BUILD_STATE.md`. Identify the first step whose status is not `DONE`.
+4. Read `PROGRESS.md`. If any entry for a step is still `BLOCKED:`, that step is
    not eligible to run — skip it and take the next non-`DONE`, non-`BLOCKED` step
    in order. If an entry is now `UNBLOCKED:`, that step is eligible again: re-run
    its gate-check and proceed with it.
-3. Resume from the first eligible step. Do NOT re-run `DONE` steps unless Dave
+5. Resume from the first eligible step. Do NOT re-run `DONE` steps unless Dave
    asks, or unless that step's gate-check now fails.
-4. Do NOT skip the planned order for any reason other than an active `BLOCKED:`.
+6. Do NOT skip the planned order for any reason other than an active `BLOCKED:`.
 
 ### For each step you execute
-1. Run the step's commands exactly as defined in `BUILD_STATE.md`.
-2. Append the full stdout+stderr to `logs/<NN-stepname>.log` (create if absent;
+1. Refresh the heartbeat: `date +%s > /tmp/ragfarm.lock`.
+2. Run the step's commands exactly as defined in `BUILD_STATE.md`.
+3. Append the full stdout+stderr to `logs/<NN-stepname>.log` (create if absent;
    append, never truncate). Do NOT paste raw output into BUILD_STATE.md or your
    reply.
-3. Run the step's **Gate** (defined in that step's row in BUILD_STATE.md).
+4. Run the step's **Gate** (defined in that step's row in BUILD_STATE.md).
    - Gate passes → set status `DONE`.
    - Gate fails → set status `FAILED`.
-4. Update that step's status line in `BUILD_STATE.md`: status, UTC timestamp,
+5. Update that step's status line in `BUILD_STATE.md`: status, UTC timestamp,
    log path, and a one-line summary (≤120 chars). Keep the file small — the
    summary points at the log; it does not reproduce it.
+6. Commit and push the result on `main` (never a feature branch):
+   ```
+   git add -A          # logs/ and .env are gitignored; never force them in
+   git commit -m "step <NN-name>: <DONE|FAILED|BLOCKED> — <≤60 char summary>"
+   git pull --rebase origin main
+   ```
+   - Rebase clean → `git push origin main`.
+   - Rebase CONFLICT → `git rebase --abort`; append a `BLOCKED:` entry to
+     `PROGRESS.md` naming the conflicted file(s); set the step `BLOCKED`; STOP.
+     Never resolve a conflict yourself — Dave does that on the laptop.
+   Never `git push --force`. Never commit `logs/` or `.env`.
 
 ### On FAILED (agent can act; needs Dave's confirm to retry)
 A `FAILED` step is one you ran but whose gate did not pass, and which you can
@@ -142,8 +175,10 @@ such an obstacle:
    is needed and the exact command/file path/credential involved.
 2. Set that step's status in `BUILD_STATE.md` to `BLOCKED` with the same UTC
    timestamp, so the table and the ledger agree.
-3. Continue with the next eligible (non-`DONE`, non-`BLOCKED`) step in order.
-4. Do NOT fake, mock, or work around a hard blocker in committed code. Clearly
+3. Commit and push so Dave sees the blocker from the laptop without SSH:
+   `git add -A && git commit -m "step <NN-name>: BLOCKED — <reason>" && git pull --rebase origin main && git push origin main`.
+4. Continue with the next eligible (non-`DONE`, non-`BLOCKED`) step in order.
+5. Do NOT fake, mock, or work around a hard blocker in committed code. Clearly
    named test mocks are fine; silently routing around a missing dependency is not.
 
 `PROGRESS.md` entry format (one block per blocker, newest appended at the end):
@@ -166,8 +201,32 @@ When `PROGRESS.md` shows an `UNBLOCKED:` entry for a step:
 3. Leave the `UNBLOCKED:` block in `PROGRESS.md` as the historical record; do not
    delete it.
 
+### On session end (clean exit)
+1. Release the heartbeat so Dave can edit freely:
+   `echo IDLE > /tmp/ragfarm.lock`
+2. Make sure all work is pushed:
+   `git pull --rebase origin main && git push origin main`
+If the session dies without reaching this (crash, network drop), the heartbeat is
+left holding a stale timestamp — Dave's ~5-minute staleness check is what covers
+that case, so a missed clean exit is safe, just less tidy.
+
+### For Dave — checking before you edit (run on the target)
+Before editing the repo from the laptop/IDE, confirm no agent is live:
+```
+cat /tmp/ragfarm.lock          # IDLE, or an epoch timestamp
+# if a timestamp: compare to now —
+echo $(( $(date +%s) - $(cat /tmp/ragfarm.lock) )) seconds old
+```
+`IDLE`, a missing file, or an age over ~300s → safe to edit, commit to `main`,
+and push. A fresh timestamp → an agent is mid-run; wait or stop the
+remote-control session first. You commit to `main` directly; there are no
+branches to merge.
+
 ### Hard rules
 - Never edit `CLAUDE.md`, the ADRs, or `docs/decisions/*` during build execution.
 - Never put raw build output anywhere except `logs/`.
 - Never skip a step except for an active `BLOCKED:`.
-- All timestamps are UTC.
+- Never `git push --force`; never commit `logs/` or `.env`.
+- Never resolve a git conflict yourself — abort and `BLOCKED:` it for Dave.
+- All work lands on `main`; `git pull --rebase` before every push.
+- All timestamps are UTC (the `/tmp/ragfarm.lock` epoch is UTC by definition).
