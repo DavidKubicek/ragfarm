@@ -30,4 +30,16 @@ UNBLOCKED: <NN-stepname> — <UTC timestamp Dave cleared it>
 
 ## Entries
 
-(none yet)
+BLOCKED: 01-npu-bringup — 2026-06-15T12:55Z
+  need:   Reboot the machine so the staged kernel parameter takes effect.
+  where:  /etc/default/grub — GRUB_CMDLINE_LINUX_DEFAULT now contains `amd_iommu=force_isolation`;
+          update-grub has already been run; GRUB config is current.
+  detail: The NPU PCI device (0000:c6:00.1) is in an IOMMU identity domain because
+          the BIOS ACPI IVRS table has a unity-mapping entry for it. AMD IOMMU SVA
+          (required by the amdxdna driver for PASID-based DMA) only works when the
+          device is in a DMA-translated domain. The in-tree amdxdna driver logs
+          "SVA bind device failed, ret -95" on every open(). The fix is to add
+          `amd_iommu=force_isolation` which overrides IVRS unity-mapping entries and
+          forces all devices into isolated (translated) domains.
+          After reboot: re-run `xrt-smi examine` and `python infra/npu/quicktest.py`
+          to verify the gate (NPU Strix in examine output, "Test Finished" from quicktest).
