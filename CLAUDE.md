@@ -112,6 +112,19 @@ apply, both defined inline in the flow below:
   clobber a change Dave pushed while idle.
 
 ### On session start
+0. **Refuse to start if another agent is live.** Before taking the heartbeat,
+   inspect `/tmp/ragfarm.lock`:
+   - If it contains the literal `IDLE`, or the file is missing → proceed.
+   - If it contains a timestamp, compute its age:
+     `age=$(( $(date +%s) - $(cat /tmp/ragfarm.lock) ))`
+     - age > 300 (stale; previous agent died without clean exit) → proceed, and
+       note in your first reply that you reclaimed a stale lock of `<age>`s.
+     - age ≤ 300 (another agent is active) → **STOP IMMEDIATELY.** Do not take
+       the heartbeat, do not pull, do not read state, do not commit, do not touch
+       the repo at all. Reply exactly: "Agent already active (lock age <age>s) —
+       refusing to start to avoid a concurrent writer. Stop the other session or
+       wait for it to go IDLE." Then end the session.
+   Only once past this check do you continue to step 1.
 1. Take the presence heartbeat:
    `date +%s > /tmp/ragfarm.lock`
    Refresh it (same command) at the start of every step, so the timestamp stays
