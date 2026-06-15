@@ -42,12 +42,14 @@ If either file is absent → this step is `BLOCKED`, not `FAILED`. Append a
 ```bash
 ls -l ~/Downloads/ryzenai/RAI_1.7.1_Linux_NPU_XRT.zip ~/Downloads/ryzenai/ryzen_ai-1.7.1.tgz
 bash infra/npu/install_npu.sh
+source /opt/xilinx/xrt/setup.sh
+source /opt/ryzenai/venv/bin/activate
 xrt-smi examine
-python infra/npu/quicktest.py
+python /opt/ryzenai/venv/quicktest/quicktest.py
 ```
 
-**Gate:** `xrt-smi examine` reports `RyzenAI-npu4` OR `NPU Strix`, AND `quicktest.py` prints
-`Test Finished`.
+**Gate:** `xrt-smi examine` reports `RyzenAI-npu4` OR `NPU Strix`, AND 
+`python /opt/ryzenai/venv/quicktest/quicktest.py` prints `Test Finished`.
 
 ---
 
