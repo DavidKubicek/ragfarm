@@ -40,6 +40,17 @@ for deb in \
   sudo apt-get install --fix-broken -y "$deb"
 done
 
+# 1. Install DKMS and kernel headers (prereqs for the next step)
+apt-get install -y dkms linux-headers-$(uname -r)
+
+# 2. Register, build, and install the DKMS module
+bash /opt/xilinx/xrt/share/amdxdna/dkms_driver.sh --install
+
+# 3. Swap out the in-tree module for the DKMS one — makes it live immediately
+#    without requiring a reboot
+modprobe -r amdxdna
+modprobe amdxdna
+
 export LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
 # shellcheck disable=SC1091
 source /opt/xilinx/xrt/setup.sh
