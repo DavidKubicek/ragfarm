@@ -3,3 +3,5 @@ models/gguf/*.gguf
 models/embeddings/*.onnx
 __pycache__/
 *.pyc
+logs/
+.env
