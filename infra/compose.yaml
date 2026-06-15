@@ -1,0 +1,46 @@
+# compose.yaml — ragfarm on-prem stack.
+# llama-server and the NPU embedder run on the HOST (they need direct iGPU/NPU
+# device access via Vulkan / XRT), NOT in containers. Containers here are the
+# stateless/CPU pieces. host.docker.internal lets containers reach host llama-server.
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports: ["127.0.0.1:6333:6333", "127.0.0.1:6334:6334"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+
+  mcp-infra-placement:
+    build: ../services/mcp-infra-placement
+    restart: unless-stopped
+    env_file: [../services/mcp-infra-placement/.env]
+    ports: ["127.0.0.1:8101:8101"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  mcp-host-control:
+    build: ../services/mcp-host-control
+    restart: unless-stopped
+    env_file: [../services/mcp-host-control/.env]
+    ports: ["127.0.0.1:8102:8102"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  mcp-fs-agent:
+    build: ../services/mcp-fs-agent
+    restart: unless-stopped
+    environment:
+      - FS_SANDBOX_ROOT=/data/corpus
+    volumes: ["/srv/corpus:/data/corpus:ro"]
+    ports: ["127.0.0.1:8103:8103"]
+
+  ingester:
+    build: ../services/ingester
+    restart: unless-stopped
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - EMBED_ENDPOINT=http://host.docker.internal:8090/embed  # NPU embedder on host
+      - CORPUS_ROOT=/data/corpus
+    volumes: ["/srv/corpus:/data/corpus:ro"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [qdrant]
+
+volumes:
+  qdrant_data:
