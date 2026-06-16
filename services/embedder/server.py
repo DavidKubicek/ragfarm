@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from FlagEmbedding import BGEM3FlagModel
 
-MODEL_NAME = "BAAI/bge-m3"
+MODEL_NAME = "/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26"
 HOST = "127.0.0.1"
 PORT = 8090
 
@@ -30,7 +30,7 @@ _model: BGEM3FlagModel | None = None
 async def lifespan(app: FastAPI):
     global _model
     print(f"Loading {MODEL_NAME} on CPU...", file=sys.stderr, flush=True)
-    _model = BGEM3FlagModel(MODEL_NAME, use_fp16=False, model_kwargs={"use_safetensors": True})
+    _model = BGEM3FlagModel(MODEL_NAME, use_fp16=False)
     print("Model ready.", file=sys.stderr, flush=True)
     yield
 
