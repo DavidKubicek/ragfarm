@@ -14,7 +14,7 @@ Reference the log file, do not parse it or reproduce it here.
 |----|---------------------|---------|-------------------|--------------------------------|---------|
 | 01 | npu-bringup         | SKIP    | 2026-06-15T19:10Z | logs/01-npu-bringup.log        | NPU UNUSED, but with CMDLINE="amd_iommu=pgtbl_v2 iommu=on" NPU/VitisAI works perfectly, Test Finished |
 | 02 | igpu-llm            | DONE    | 2026-06-15T20:05Z | logs/02-igpu-llm.log           | llama.cpp+Vulkan built, Qwen2.5-7B-Instruct Q4_K_M loaded, gate passed (Pong! at ~11.8 tok/s) |
-| 03 | embedder-service    | DONE    | 2026-06-15T20:28Z | logs/03-embedder-service.log   | bge-small-en-v1.5, Quark INT8/QDQ, VitisAI EP, 384-dim L2-norm, gate passed |
+| 03 | embedder-service    | PENDING |                   | logs/03-embedder-service.log   |         |
 | 04 | qdrant-ingester     | PENDING |                   | logs/04-qdrant-ingester.log    |         |
 | 05 | mcp-placement       | PENDING |                   | logs/05-mcp-placement.log      |         |
 | 06 | mcp-fs-host-control | PENDING |                   | logs/06-mcp-fs-host-control.log|         |
