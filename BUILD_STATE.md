@@ -4,7 +4,7 @@ Updated by the agent per build protocol in `CLAUDE.md` (Chapter 2).
 Step statuses: `PENDING` | `DONE` | `FAILED` | `BLOCKED` | `SKIP`
 `SKIP` disables step processing: no agent will parse, run, eval any of the step's parts or gate-checks.
 Set to `PENDING` and it becomes a normal planned part of the sequence again.
-Raw stdout+stderr per whole step gets append-redirected (for each command use: cmd >> log 2>&1) to `logs/<NN-stepname>.log`.
+Raw stdout+stderr per whole step gets appended to `logs/<NN-stepname>.log`.
 Timestamps are in UTC. Keep summaries <120 chars; sum-up the resulting success or reason for failure.
 Reference the log file, do not parse it or reproduce it here.
 

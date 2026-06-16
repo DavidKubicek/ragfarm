@@ -144,8 +144,7 @@ apply, both defined inline in the flow below:
 ### For each step you execute
 1. Refresh the heartbeat: `date +%s > /tmp/ragfarm.lock`.
 2. Run the step's commands exactly as defined in `BUILD_STATE.md`.
-3. Append all of stdout+stderr to a log file `logs/<NN-stepname>.log` by executing
-   commands using: `command >> log 2>&1` (auto-creates, appends-only)
+3. Append all of stdout+stderr to a log file `logs/<NN-stepname>.log` (create if missing)
    Do NOT paste raw output into BUILD_STATE.md or your reply.
 4. Run the step's **Gate** (defined in that step's row in BUILD_STATE.md).
    - Gate passes → set status `DONE`.
