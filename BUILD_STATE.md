@@ -89,7 +89,10 @@ why the NPU path was abandoned for this corpus (mixed Czech + English; wide
 structured table rows; NPU-fittable models are English-only and seq-limited). The
 prior NPU build (bge-small-en-v1.5) is invalid and is deleted below.
 
-Model: **BAAI/BGE-M3** (568M, 100+ languages incl. Czech, up to 8192 tokens).
+Model: **BAAI/BGE-M3** download specific snapshot ID 50f9396f75618b3389c1fd1068a1ff58dc7b5b26 
+(568M, 100+ languages incl. Czech, up to 8192 tokens).
+Use environment variable EMBED_MODEL_PATH to actually load the model from that path,
+not by name (variable set in systemd service unit).
 Emits dense AND sparse vectors from one pass — both are served, so step 04 stores
 named vectors for hybrid retrieval (dense for semantics, sparse for exact
 host/IP/VLAN token matches). Record model + resolved revision in
@@ -117,12 +120,10 @@ pip install -U FlagEmbedding fastapi uvicorn
 # Pin and record the revision actually pulled:
 python - <<'PY'
 from huggingface_hub import snapshot_download
-print("snapshot:", snapshot_download("BAAI/bge-m3"))
+print("snapshot:", snapshot_download("BAAI/bge-m3", revision="50f9396f75618b3389c1fd1068a1ff58dc7b5b26", ignore_patterns=["pytorch_model.bin"]))
 PY
 
-# Start the service (loads model once, serves on :8090):
-python services/embedder/server.py &
-
+# Launch embedder-server via manifests/embedder-server.service as a new system unit.
 # Probe dense+sparse with one numeric/English table row and one Czech sentence:
 curl -s 127.0.0.1:8090/embed \
   -H 'Content-Type: application/json' \

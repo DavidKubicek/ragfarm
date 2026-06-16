@@ -1,0 +1,20 @@
+[Unit]
+Description=ragfarm embedder (BGE-M3, CPU)
+After=network.target
+
+[Service]
+Type=simple
+User=dave
+ExecStart=/opt/ryzenai/venv/bin/python /home/dave/ragfarm/services/embedder/server.py
+Environment=EMBED_MODEL_PATH=/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26
+Environment=XILINX_XRT=/opt/xilinx/xrt
+Environment=PYTHONPATH=/opt/xilinx/xrt/python:/opt/ryzenai/venv/bin/python:/opt/xilinx/xrt/python
+Environment=PATH=/opt/xilinx/xrt/bin:/home/dave/.local/bin:/opt/ryzenai/venv/bin:/opt/xilinx/xrt/bin:/home/dave/.local/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+Environment=LD_LIBRARY_PATH=/opt/xilinx/xrt/lib:/opt/ryzenai/venv/lib/python3.12/site-packages/flexml/flexml_extras/lib:/opt/ryzenai/venv/lib/python3.12/site-packages/onnxruntime/capi:/opt/ryzenai/venv/lib/python3.12/site-packages/voe/lib:/opt/xilinx/xrt/lib:/opt/rocm/lib:/opt/rocm/lib64:
+WorkingDirectory=/home/dave/ragfarm
+Restart=on-failure
+StandardOutput=append:/home/dave/ragfarm/logs/03-embedder-service.log
+StandardError=append:/home/dave/ragfarm/logs/03-embedder-service.log
+
+[Install]
+WantedBy=default.target

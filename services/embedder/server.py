@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from FlagEmbedding import BGEM3FlagModel
 
-MODEL_NAME = "/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26"
+MODEL_NAME = os.environ.get("EMBED_MODEL_PATH")
 HOST = "127.0.0.1"
 PORT = 8090
 
