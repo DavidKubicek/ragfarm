@@ -1,32 +1,35 @@
 # Embedding Model
 
-**Model:** BAAI/bge-small-en-v1.5  
-**Revision:** 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a  
-**Source:** https://huggingface.co/BAAI/bge-small-en-v1.5  
-**Parameters:** 33M  
-**Embedding dim:** 384  
-**Max seq len:** 128 (fixed, static export)  
-**Quantization:** Quark 0.11.2, static INT8/QDQ, `enable_npu_transformer=True`  
-**Runtime:** ORT 1.23.3 (VitisAI EP → NPU RyzenAI-npu4, CPU fallback)
+**Model:** BAAI/bge-m3  
+**Revision:** 5617a9f61b028005a4858fdac845db406aefb181  
+**Source:** https://huggingface.co/BAAI/bge-m3  
+**Parameters:** 568M  
+**Embedding dim:** 1024 (dense), variable-length sparse (lexical weights)  
+**Max seq len:** 8192  
+**Languages:** 100+ (incl. Czech, English)  
+**Quantization:** none — CPU FP32 via FlagEmbedding  
+**Runtime:** FlagEmbedding 1.4.0, BGEM3FlagModel, use_fp16=False
+
+## Rationale for switch from bge-small-en-v1.5
+
+Prior NPU build (bge-small-en-v1.5, 384-dim) was English-only and limited to seq=128.
+Corpus contains mixed Czech + English with wide structured table rows.  
+BGE-M3 handles 100+ languages, 8192-token context, and emits both dense (1024-dim)
+and sparse (lexical) vectors — enabling hybrid retrieval in Qdrant (step 04).  
+CPU inference is fast enough for batch ingestion; NPU path abandoned (ADR-0002).
 
 ## Paths
 
 | Artefact | Path |
 |----------|------|
-| Tokenizer + raw ONNX (FP32) | `models/embeddings/bge-small-en-v1.5-onnx-static/` |
-| Quark-quantised ONNX (INT8 QDQ) | `models/embeddings/bge-small-en-v1.5-quark-static/model_quantized.onnx` |
-| Quantization script | `infra/embedder/quark_quantize.py` |
+| HuggingFace cache | `~/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/5617a9f61b028005a4858fdac845db406aefb181/` |
 | HTTP service | `services/embedder/server.py` |
 
-## Service
+## Service contract
 
 Listens on `127.0.0.1:8090`.  
-`POST /embed` — body `{"input": ["text1", "text2"]}`, response `{"embeddings": [[...]], "dim": 384}`.  
-Embeddings are L2-normalised (norm ≈ 1.0), suitable for cosine similarity.
-
-## Quantization notes
-
-- Model exported with static shapes (batch=1, seq=128) — required by VitisAI EP vaiml compiler (dynamic shapes trigger MLIR assertion in libvaiml.so).
-- 73 Gemm ops quantized to INT8. Remaining ops (LayerNorm, Add, Softmax, etc.) fall back to CPU.
-- Calibrated on 20 domain-relevant sentences covering RAG, NPU, and infra topics.
-- Quark config: `QuantFormat.QDQ`, `QuantType.QInt8`, `per_channel=False`, `include_cle=True`.
+`POST /embed` — body `{"input": ["text", ...], "kind": "passage"|"query"}`,
+response `{"dense": [[...1024...]], "sparse": [{"<token_id>": weight, ...}], "dim": 1024}`.  
+`GET /health` — returns `{"status": "ok"}`.  
+Dense vectors are L2-normalised (norm ≈ 1.0).  
+`kind` defaults to `passage`; retrieval (step 07) passes `query`.

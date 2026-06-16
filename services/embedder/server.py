@@ -1,115 +1,73 @@
 """
 Embedder HTTP service — :8090/embed
-Runs BAAI/bge-small-en-v1.5 (Quark INT8) on the NPU via VitisAI EP.
+Runs BAAI/bge-m3 on CPU via FlagEmbedding (dense + sparse in one pass).
 
 Start: python services/embedder/server.py
-  (needs /opt/ryzenai/venv + XRT env sourced)
-Request: POST /embed  {"input": ["text1", "text2", ...]}
-Response: {"embeddings": [[...], [...]], "dim": 384}
+Request:  POST /embed  {"input": ["text1", ...], "kind": "passage"|"query"}
+Response: {"dense": [[...1024...]], "sparse": [{"<tok_id>": weight, ...}], "dim": 1024}
 """
 import os
 import sys
-import json
-import numpy as np
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
-import onnxruntime as ort
-from transformers import AutoTokenizer
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-BASE        = Path(__file__).resolve().parents[2]
-MODEL_DIR   = BASE / "models/embeddings/bge-small-en-v1.5-quark-static"
-TOKENIZER_DIR = BASE / "models/embeddings/bge-small-en-v1.5-onnx-static"
-VAIP_CFG    = "/opt/ryzenai/venv/voe-4.0-linux_x86_64/vaip_config.json"
-SEQ_LEN     = 128
-HOST        = "127.0.0.1"
-PORT        = 8090
+from FlagEmbedding import BGEM3FlagModel
+
+MODEL_NAME = "BAAI/bge-m3"
+HOST = "127.0.0.1"
+PORT = 8090
+
+_model: BGEM3FlagModel | None = None
 
 
-def load_session():
-    so = ort.SessionOptions()
-    providers = [
-        ("VitisAIExecutionProvider", {"config_file": VAIP_CFG}),
-        "CPUExecutionProvider",
-    ]
-    return ort.InferenceSession(
-        str(MODEL_DIR / "model_quantized.onnx"),
-        sess_options=so,
-        providers=providers,
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _model
+    print(f"Loading {MODEL_NAME} on CPU...", file=sys.stderr, flush=True)
+    _model = BGEM3FlagModel(MODEL_NAME, use_fp16=False)
+    print("Model ready.", file=sys.stderr, flush=True)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+class EmbedRequest(BaseModel):
+    input: list[str]
+    kind: Literal["passage", "query"] = "passage"
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/embed")
+def embed(req: EmbedRequest):
+    if not req.input:
+        raise HTTPException(status_code=400, detail="input must be a non-empty list")
+
+    output = _model.encode(
+        req.input,
+        batch_size=12,
+        max_length=8192,
+        return_dense=True,
+        return_sparse=True,
+        return_colbert_vecs=False,
     )
 
+    dense = [v.tolist() for v in output["dense_vecs"]]
+    # lexical_weights keys are token-id ints; stringify for JSON
+    sparse = [{str(k): float(v) for k, v in row.items()} for row in output["lexical_weights"]]
 
-def embed_texts(sess, tokenizer, texts: list[str]) -> list[list[float]]:
-    embeddings = []
-    for text in texts:
-        enc = tokenizer(
-            [text], return_tensors="np",
-            padding="max_length", max_length=SEQ_LEN, truncation=True,
-        )
-        out = sess.run(None, {
-            "input_ids":      enc["input_ids"].astype(np.int64),
-            "attention_mask": enc["attention_mask"].astype(np.int64),
-            "token_type_ids": enc["token_type_ids"].astype(np.int64),
-        })
-        hidden = out[0]  # (1, SEQ_LEN, 384)
-        mask = enc["attention_mask"][..., np.newaxis].astype(np.float32)
-        emb = (hidden * mask).sum(axis=1) / mask.sum(axis=1)
-        # L2-normalise (matches bge-small usage)
-        norm = np.linalg.norm(emb, axis=-1, keepdims=True)
-        emb = emb / np.maximum(norm, 1e-12)
-        embeddings.append(emb[0].tolist())
-    return embeddings
-
-
-class EmbedHandler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        pass  # suppress per-request noise; errors still reach stderr
-
-    def do_GET(self):
-        if self.path == "/health":
-            self._respond(200, {"status": "ok"})
-        else:
-            self._respond(404, {"error": "not found"})
-
-    def do_POST(self):
-        if self.path != "/embed":
-            self._respond(404, {"error": "not found"})
-            return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
-        try:
-            payload = json.loads(body)
-            texts = payload["input"]
-            if not isinstance(texts, list) or not texts:
-                raise ValueError("input must be a non-empty list of strings")
-        except Exception as e:
-            self._respond(400, {"error": str(e)})
-            return
-        embeddings = embed_texts(self.server.sess, self.server.tokenizer, texts)
-        self._respond(200, {"embeddings": embeddings, "dim": len(embeddings[0])})
-
-    def _respond(self, code, body):
-        data = json.dumps(body).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
-def main():
-    print("Loading tokenizer...", file=sys.stderr)
-    tokenizer = AutoTokenizer.from_pretrained(str(TOKENIZER_DIR))
-    print("Loading ORT session (VitisAI EP)...", file=sys.stderr)
-    sess = load_session()
-    print(f"Providers: {sess.get_providers()}", file=sys.stderr)
-
-    server = HTTPServer((HOST, PORT), EmbedHandler)
-    server.sess = sess
-    server.tokenizer = tokenizer
-    print(f"Embedder listening on {HOST}:{PORT}", file=sys.stderr)
-    server.serve_forever()
+    return JSONResponse({"dense": dense, "sparse": sparse, "dim": len(dense[0])})
 
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
