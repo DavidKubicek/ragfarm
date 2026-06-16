@@ -8,8 +8,9 @@ blocker channel (Chapter 2) and wait.
 
 Progress state does NOT live in this file or in conversation history (sessions
 are siloed across CLI / Remote Control / IDE). It lives in `BUILD_STATE.md`
-(linear build progress) and `PROGRESS.md` (human-gated blockers). Chapter 2
-defines exactly how to use both.
+(linear build progress) and `PROGRESS.md` (human-gated blockers) and in the detailed
+logs of stdout+stderr from previous executions in `logs/<NN-stepname>.log`. Chapter 2
+defines exactly how to use the first two.
 
 ---
 
@@ -73,14 +74,8 @@ live in `BUILD_STATE.md`; this is the canonical list of *what* the steps are and
 - OpenNebula is the placement owner (XML-RPC `one.vm.info` / `one.vmpool.info`);
   the placement MCP is built around that, **not** libvirt.
 - "Quark" = AMD's quantizer for the NPU embedding path (ADR-0002).
-- Discarded from the half-asleep first brief: "Optane tool" (Optane is
-  discontinued; the real item was Quark) and the assumption that llama.cpp or
-  ROCm gets you onto the NPU (it does not).
 
 ### Open questions for Dave (not blockers for steps 1–4)
-- Exact embedding model preference, or accept the agent's BF16-friendly pick.
-- BIOS version string + confirmation the NPU is enabled (transcribe into
-  `docs/hardware/bios-f5x.md` from the screenshot).
 - Corpus location on the host (compose assumes `/srv/corpus`, read-only).
 
 ---
@@ -137,29 +132,31 @@ apply, both defined inline in the flow below:
    Dave clears it on the laptop.
 3. Read `BUILD_STATE.md`. Identify the first step whose status is not `DONE`.
 4. Read `PROGRESS.md`. If any entry for a step is still `BLOCKED:`, that step is
-   not eligible to run — skip it and take the next non-`DONE`, non-`BLOCKED` step
+   not eligible to run — skip it and take the next non-`DONE`, non-`BLOCKED:` step
    in order. If an entry is now `UNBLOCKED:`, that step is eligible again: re-run
-   its gate-check and proceed with it.
-5. Resume from the first eligible step. Do NOT re-run `DONE` steps unless Dave
-   asks, or unless that step's gate-check now fails.
-6. Do NOT skip the planned order for any reason other than an active `BLOCKED:`.
+   its gate-check and proceed with it, if gate-check fails.
+5. Resume from the first step whose status is none of `DONE` / `SKIP` / `BLOCKED:`.
+   A `SKIP` step is ignored: never run it, re-run it, or gate-check it, until it is
+   changed to `PENDING`. Do not re-run `DONE` steps unless asked to, or unless its
+   gate-check now fails. 
+6. Do NOT skip the planned order for any reason other than an active `SKIP` or `BLOCKED:`.
 
 ### For each step you execute
 1. Refresh the heartbeat: `date +%s > /tmp/ragfarm.lock`.
 2. Run the step's commands exactly as defined in `BUILD_STATE.md`.
-3. Append the full stdout+stderr to `logs/<NN-stepname>.log` (create if absent;
-   append, never truncate). Do NOT paste raw output into BUILD_STATE.md or your
-   reply.
+3. Append all of stdout+stderr to a log file `logs/<NN-stepname>.log` by executing
+   commands using: `command >> log 2>&1` (auto-creates, appends-only)
+   Do NOT paste raw output into BUILD_STATE.md or your reply.
 4. Run the step's **Gate** (defined in that step's row in BUILD_STATE.md).
    - Gate passes → set status `DONE`.
    - Gate fails → set status `FAILED`.
 5. Update that step's status line in `BUILD_STATE.md`: status, UTC timestamp,
-   log path, and a one-line summary (≤120 chars). Keep the file small — the
-   summary points at the log; it does not reproduce it.
+   log path, and a short summary (<120 chars). Keep the file small — summary
+   references what's in the log; do not reproduce it elsewhere.
 6. Commit and push the result on `main` (never a feature branch):
    ```
    git add -A          # logs/ and .env are gitignored; never force them in
-   git commit -m "step <NN-name>: <DONE|FAILED|BLOCKED> — <≤60 char summary>"
+   git commit -m "Step <NN-name>: <DONE|FAILED|BLOCKED> — <≤60 char summary>"
    git pull --rebase origin main
    ```
    - Rebase clean → `git push origin main`.
@@ -174,10 +171,9 @@ diagnose yourself.
 - Stop. Read the relevant tail of `logs/<NN-stepname>.log` and summarize the
   probable cause in ≤5 lines.
 - Propose the fix and **WAIT for Dave's explicit confirmation before retrying.**
-  Never loop unattended on a failing step — several steps touch live OpenNebula
-  infra that can reboot hosts.
-- After Dave confirms, retry the **same** step. Re-running replaces that step's
-  status line and appends (never truncates) its log.
+  Never loop unattended on a failing step.
+- After Dave confirms, retry the **same** step with the fix. Re-running replaces
+  that step's status line and appends (never truncates) its log.
 
 ### On BLOCKED (only Dave can clear; hand off and move on)
 A step is `BLOCKED`, not `FAILED`, when you **cannot proceed without Dave**:
@@ -190,7 +186,7 @@ such an obstacle:
    timestamp, so the table and the ledger agree.
 3. Commit and push so Dave sees the blocker from the laptop without SSH:
    `git add -A && git commit -m "step <NN-name>: BLOCKED — <reason>" && git pull --rebase origin main && git push origin main`.
-4. Continue with the next eligible (non-`DONE`, non-`BLOCKED`) step in order.
+4. Continue with the next eligible (non-`DONE`, non-`BLOCKED`, non-`SKIP`) step in order.
 5. Do NOT fake, mock, or work around a hard blocker in committed code. Clearly
    named test mocks are fine; silently routing around a missing dependency is not.
 
@@ -226,19 +222,13 @@ that case, so a missed clean exit is safe, just less tidy.
 ### For Dave — checking before you edit (run on the target)
 Before editing the repo from the laptop/IDE, confirm no agent is live:
 ```
-cat /tmp/ragfarm.lock          # IDLE, or an epoch timestamp
-# if a timestamp: compare to now —
-echo $(( $(date +%s) - $(cat /tmp/ragfarm.lock) )) seconds old
+cat /tmp/ragfarm.lock
 ```
-`IDLE`, a missing file, or an age over ~300s → safe to edit, commit to `main`,
-and push. A fresh timestamp → an agent is mid-run; wait or stop the
-remote-control session first. You commit to `main` directly; there are no
-branches to merge.
 
 ### Hard rules
 - Never edit `CLAUDE.md`, the ADRs, or `docs/decisions/*` during build execution.
 - Never put raw build output anywhere except `logs/`.
-- Never skip a step except for an active `BLOCKED:`.
+- Never skip a step except for an active `BLOCKED:` or `SKIP` state.
 - Never `git push --force`; never commit `logs/` or `.env`.
 - Never resolve a git conflict yourself — abort and `BLOCKED:` it for Dave.
 - All work lands on `main`; `git pull --rebase` before every push.

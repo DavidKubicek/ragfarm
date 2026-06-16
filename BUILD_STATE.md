@@ -1,22 +1,24 @@
 # BUILD_STATE — single source of truth for build progress
 
-Updated by the agent per the build protocol in `CLAUDE.md` (Chapter 2).
-Status values: `PENDING` | `DONE` | `FAILED` | `BLOCKED`.
-Raw stdout+stderr per step lives in `logs/<NN-stepname>.log`.
-All timestamps are UTC. Keep summaries ≤120 chars; they point at the log, they
-do not reproduce it.
+Updated by the agent per build protocol in `CLAUDE.md` (Chapter 2).
+Step statuses: `PENDING` | `DONE` | `FAILED` | `BLOCKED` | `SKIP`
+`SKIP` disables step processing: no agent will parse, run, eval any of the step's parts or gate-checks.
+Set to `PENDING` and it becomes a normal planned part of the sequence again.
+Raw stdout+stderr per whole step gets append-redirected (for each command use: cmd >> log 2>&1) to `logs/<NN-stepname>.log`.
+Timestamps are in UTC. Keep summaries <120 chars; sum-up the resulting success or reason for failure.
+Reference the log file, do not parse it or reproduce it here.
 
 ## Status table
 
-| NN | step                | status  | updated_utc | log                            | summary |
-|----|---------------------|---------|-------------|--------------------------------|---------|
-| 01 | npu-bringup         | DONE    | 2026-06-15T19:10Z | logs/01-npu-bringup.log   | DKMS xrt-amdxdna 1.0.0, pgtbl_v2+iommu=on, RyzenAI-npu4, Test Finished |
-| 02 | igpu-llm            | DONE    | 2026-06-15T20:05Z | logs/02-igpu-llm.log      | llama.cpp+Vulkan built, Qwen2.5-7B-Instruct Q4_K_M loaded, gate passed (Pong! at ~11.8 tok/s) |
-| 03 | embedder-service    | DONE    | 2026-06-15T20:28Z | logs/03-embedder-service.log | bge-small-en-v1.5, Quark INT8/QDQ, VitisAI EP, 384-dim L2-norm, gate passed |
-| 04 | qdrant-ingester     | PENDING |             | logs/04-qdrant-ingester.log    |         |
-| 05 | mcp-placement       | PENDING |             | logs/05-mcp-placement.log      |         |
-| 06 | mcp-fs-host-control | PENDING |             | logs/06-mcp-fs-host-control.log|         |
-| 07 | agent-wiring        | PENDING |             | logs/07-agent-wiring.log       |         |
+| NN | step                | status  | updated_utc       | log                            | summary |
+|----|---------------------|---------|-------------------|--------------------------------|---------|
+| 01 | npu-bringup         | SKIP    | 2026-06-15T19:10Z | logs/01-npu-bringup.log        | NPU UNUSED, but with CMDLINE="amd_iommu=pgtbl_v2 iommu=on" NPU/VitisAI works perfectly, Test Finished |
+| 02 | igpu-llm            | DONE    | 2026-06-15T20:05Z | logs/02-igpu-llm.log           | llama.cpp+Vulkan built, Qwen2.5-7B-Instruct Q4_K_M loaded, gate passed (Pong! at ~11.8 tok/s) |
+| 03 | embedder-service    | DONE    | 2026-06-15T20:28Z | logs/03-embedder-service.log   | bge-small-en-v1.5, Quark INT8/QDQ, VitisAI EP, 384-dim L2-norm, gate passed |
+| 04 | qdrant-ingester     | PENDING |                   | logs/04-qdrant-ingester.log    |         |
+| 05 | mcp-placement       | PENDING |                   | logs/05-mcp-placement.log      |         |
+| 06 | mcp-fs-host-control | PENDING |                   | logs/06-mcp-fs-host-control.log|         |
+| 07 | agent-wiring        | PENDING |                   | logs/07-agent-wiring.log       |         |
 
 ---
 
@@ -81,22 +83,57 @@ completion request returns a non-empty assistant message.
 ---
 
 ### 03 — embedder-service
-Wrap the Quark-compiled encoder (running on the NPU from step 01) behind an HTTP
-`/embed` service on `:8090`. Ingestion (step 04) and retrieval (step 07) call it.
-Record the exact model+revision in `models/embeddings/MODEL.md`.
+Serve a multilingual embedder behind HTTP `/embed` on `:8090`. Ingestion (step 04)
+and retrieval (step 07) call it. **Runs on CPU, not the NPU** — see ADR-0002 for
+why the NPU path was abandoned for this corpus (mixed Czech + English; wide
+structured table rows; NPU-fittable models are English-only and seq-limited). The
+prior NPU build (bge-small-en-v1.5) is invalid and is deleted below.
+
+Model: **BAAI/BGE-M3** (568M, 100+ languages incl. Czech, up to 8192 tokens).
+Emits dense AND sparse vectors from one pass — both are served, so step 04 stores
+named vectors for hybrid retrieval (dense for semantics, sparse for exact
+host/IP/VLAN token matches). Record model + resolved revision in
+`models/embeddings/MODEL.md`.
+
+**Service contract (`services/embedder/server.py`):**
+- `POST /embed` body `{"input": ["text", ...], "kind": "passage"|"query"}` →
+  `{"dense": [[...1024...]], "sparse": [{"<token_id>": weight, ...}], "dim": 1024}`
+- `kind` defaults to `passage`; retrieval (step 07) passes `query`.
+- CPU inference via FlagEmbedding (`BGEM3FlagModel`, dense+sparse in one call).
+  Fall back to ONNX-on-CPU dense + separate sparse only if the torch footprint
+  is a problem.
 
 **Commands:**
 ```bash
-# Start the embedder service (RyzenAI ONNX EP, Quark-compiled encoder) on :8090.
-# Probe it:
+# Remove dead NPU-era embedder artifacts before rebuilding on CPU:
+rm -rf models/embeddings/bge-small-en-v1.5-onnx-static/
+find models/embeddings/ -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+# (the GGUF LLM under models/gguf/ is step 02's — do NOT touch it)
+
+# Install deps (CPU torch is fine; no CUDA):
+pip install -U FlagEmbedding fastapi uvicorn
+
+# Pin and record the revision actually pulled:
+python - <<'PY'
+from huggingface_hub import snapshot_download
+print("snapshot:", snapshot_download("BAAI/bge-m3"))
+PY
+
+# Start the service (loads model once, serves on :8090):
+python services/embedder/server.py &
+
+# Probe dense+sparse with one numeric/English table row and one Czech sentence:
 curl -s 127.0.0.1:8090/embed \
   -H 'Content-Type: application/json' \
-  -d '{"input":["hello world"]}'
+  -d '{"input":["prod-kvm-03 10.20.1.43 VLAN203","jak zalohovat hostitele"],"kind":"passage"}'
 ```
 
-**Gate:** the probe returns `{"embeddings": [[...]]}` with a non-empty vector of
-the expected dimensionality, AND `models/embeddings/MODEL.md` records the exact
-model + revision used.
+**Gate:** the probe returns a `dense` array of 1024-dim vectors (one per input,
+L2-norm ≈ 1.0) AND a non-empty `sparse` map per input, AND
+`models/embeddings/MODEL.md` records `BAAI/bge-m3` with the resolved revision
+hash. Both probe inputs — the English/numeric table row and the Czech sentence —
+must return finite vectors; this is the explicit multilingual check the prior
+bge-small build would have failed.
 
 ---
 
