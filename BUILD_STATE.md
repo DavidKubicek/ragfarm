@@ -108,6 +108,7 @@ host/IP/VLAN token matches). Record model + resolved revision in
 # Remove dead NPU-era embedder artifacts before rebuilding on CPU:
 rm -rf models/embeddings/bge-small-en-v1.5-onnx-static/
 find models/embeddings/ -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+rm -f models/embeddings/MODEL.md   # stale bge-small record; gate regenerates it
 # (the GGUF LLM under models/gguf/ is step 02's — do NOT touch it)
 
 # Install deps (CPU torch is fine; no CUDA):
@@ -138,18 +139,38 @@ bge-small build would have failed.
 ---
 
 ### 04 — qdrant-ingester
-Bring up Qdrant and ingest a small test corpus; retrieval depends on a populated
-collection. Depends on step 03 (`/embed`) being up.
+Bring up Qdrant and ingest the corpus; retrieval depends on a populated
+collection. Depends on step 03 (`/embed`) being up. The ingestion design — how
+docx vs xlsx are parsed and chunked — is specified in
+`docs/ingestion-pipeline.md`; follow it, do not invent a different chunker.
+
+Key points (full detail in that doc):
+- **xlsx** → one row per chunk, serialized as a flat `key: value, ...` string so
+  each host/IP/VLAN record is independently retrievable. Header row defines keys.
+  Identifiers kept verbatim (no lowercasing) so sparse exact-match works.
+- **docx** → semantic chunks of ~256–384 tokens with ~15% overlap, split on
+  headings/paragraphs, never mid-sentence. Tables inside docx route to the xlsx path.
+- Each chunk stored with BOTH a dense named vector and a sparse named vector from
+  step 03, enabling hybrid (RRF) search. Collection `corpus` uses named vectors
+  `dense` (1024, cosine) and `sparse` (sparse index).
+- Payload per point: `source_file`, `kind` (`table_row`|`doc_text`), `lang`
+  (best-effort), and the raw chunk text. Deterministic point IDs for idempotent
+  re-ingest; `--recreate` to rebuild on model/schema change.
 
 **Commands:**
 ```bash
 docker compose -f infra/compose.yaml up -d qdrant
-python services/ingester/ingester.py --corpus <small-test-corpus-path>
-# verify the collection:
-curl -s 127.0.0.1:6333/collections/corpus
+# Ingest the real corpus dir (CORPUS_PATH); start with a 2-3 file subset to verify:
+python services/ingester/ingester.py --corpus "$CORPUS_PATH" --recreate
+# verify the collection and that both vector types are present:
+curl -s 127.0.0.1:6333/collections/corpus | python3 -m json.tool
 ```
 
-**Gate:** collection `corpus` exists AND reports a point count > 0.
+**Gate:** collection `corpus` exists, reports point count > 0, AND its schema
+shows both a `dense` (size 1024) and a `sparse` named vector. A probe query for a
+known hostname returns the correct table row in the top results (proves sparse
+exact-match works), AND a Czech semantic query returns a relevant doc chunk
+(proves multilingual dense works).
 
 ---
 
@@ -204,7 +225,11 @@ OpenNebula.
 Wire the client-side agent: OpenAI-compatible client → llama-server (step 02),
 MCP client → the HTTP MCP servers (steps 05–06), expose their tools to the model.
 Add a `rag-retrieval` MCP that queries Qdrant (`search_corpus`) using the
-embedder (step 03). Follow `services/mcp-gateway/README.md`.
+embedder (step 03), following `services/mcp-gateway/README.md`. `search_corpus`
+must embed the query via `/embed` with `kind=query`, then do HYBRID retrieval:
+dense + sparse with RRF fusion (Qdrant Query API prefetch on both named vectors).
+This is what makes exact host/IP lookups and Czech/English semantic search both
+work from one tool.
 
 **Commands:**
 ```bash
