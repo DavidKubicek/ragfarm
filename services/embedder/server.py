@@ -30,7 +30,7 @@ _model: BGEM3FlagModel | None = None
 async def lifespan(app: FastAPI):
     global _model
     print(f"Loading {MODEL_NAME} on CPU...", file=sys.stderr, flush=True)
-    _model = BGEM3FlagModel(MODEL_NAME, use_fp16=False)
+    _model = BGEM3FlagModel(MODEL_NAME, use_fp16=False, model_kwargs={"use_safetensors": True})
     print("Model ready.", file=sys.stderr, flush=True)
     yield
 
