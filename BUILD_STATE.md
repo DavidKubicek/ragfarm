@@ -141,37 +141,58 @@ bge-small build would have failed.
 
 ### 04 — qdrant-ingester
 Bring up Qdrant and ingest the corpus; retrieval depends on a populated
-collection. Depends on step 03 (`/embed`) being up. The ingestion design — how
-docx vs xlsx are parsed and chunked — is specified in
-`docs/ingestion-pipeline.md`; follow it, do not invent a different chunker.
+collection. Depends on step 03 (`/embed`) being up.
 
-Key points (full detail in that doc):
-- **xlsx** → one row per chunk, serialized as a flat `key: value, ...` string so
-  each host/IP/VLAN record is independently retrievable. Header row defines keys.
-  Identifiers kept verbatim (no lowercasing) so sparse exact-match works.
-- **docx** → semantic chunks of ~256–384 tokens with ~15% overlap, split on
-  headings/paragraphs, never mid-sentence. Tables inside docx route to the xlsx path.
-- Each chunk stored with BOTH a dense named vector and a sparse named vector from
-  step 03, enabling hybrid (RRF) search. Collection `corpus` uses named vectors
-  `dense` (1024, cosine) and `sparse` (sparse index).
-- Payload per point: `source_file`, `kind` (`table_row`|`doc_text`), `lang`
-  (best-effort), and the raw chunk text. Deterministic point IDs for idempotent
-  re-ingest; `--recreate` to rebuild on model/schema change.
+**The ingester is COMMITTED and FROZEN — do not regenerate, rewrite, or "improve"
+it.** `services/ingester/ingester.py` (routing/embed/Qdrant) and
+`services/ingester/xlsx_tables.py` (all XLSX structural parsing) are hand-tuned and
+regression-locked against real corpus fixtures. The earlier plan to have a build
+step generate the chunker is SUPERSEDED. Treat these two files as read-only inputs
+to this step, exactly like a vendored dependency. If you believe the parser is
+wrong, raise it via the PROGRESS.md blocker channel — do NOT edit it inline.
+
+`docs/ingestion-pipeline.md` remains the design reference for WHAT the parser does
+(row-per-chunk xlsx, semantic prose chunks, named dense+sparse vectors, verbatim
+identifiers). The code is the source of truth where they differ.
+
+**Precondition — regression must pass before ingest.** The parser ships with an
+offline regression that needs no Qdrant/embedder:
+```bash
+FIXTURES=tests/fixtures python services/ingester/test_xlsx_tables.py
+```
+This must print `ALL PASS` (exit 0). If it does not, STOP and set this step
+`FAILED` — the working tree does not match the validated parser; do not ingest a
+corpus through a parser that fails its own fixtures. Diagnose from the failing
+assertion, propose a fix, and WAIT for Dave (do not edit the frozen files to make
+the test pass).
 
 **Commands:**
 ```bash
+# 0. regression gate on the frozen parser (no services needed):
+FIXTURES=tests/fixtures python services/ingester/test_xlsx_tables.py
+
+# 1. bring up Qdrant:
 docker compose -f infra/compose.yaml up -d qdrant
-# Ingest the real corpus dir (CORPUS_PATH); start with a 2-3 file subset to verify:
+
+# 2. confirm step-03 embedder is live (ingester calls :8090/embed):
+curl -s 127.0.0.1:8090/embed \
+  -H 'Content-Type: application/json' \
+  -d '{"input":["prod-kvm-03 10.20.1.43 VLAN203"],"kind":"passage"}' >/dev/null
+
+# 3. ingest a SMALL verification subset first (2-3 files incl. one messy xlsx),
+#    then the full corpus. --recreate rebuilds on schema/model change:
 python services/ingester/ingester.py --corpus "$CORPUS_PATH" --recreate
-# verify the collection and that both vector types are present:
+
+# 4. verify the collection and that both vector types are present:
 curl -s 127.0.0.1:6333/collections/corpus | python3 -m json.tool
 ```
 
-**Gate:** collection `corpus` exists, reports point count > 0, AND its schema
-shows both a `dense` (size 1024) and a `sparse` named vector. A probe query for a
-known hostname returns the correct table row in the top results (proves sparse
-exact-match works), AND a Czech semantic query returns a relevant doc chunk
-(proves multilingual dense works).
+**Gate:** the regression prints `ALL PASS`; collection `corpus` exists with point
+count > 0 and a schema showing BOTH a `dense` (size 1024) and a `sparse` named
+vector; a probe query for a known hostname (e.g. `hsmbvxip001ts`) returns the
+correct table row in the top results (proves sparse exact-match), AND a Czech
+semantic query returns a relevant doc chunk (proves multilingual dense). If
+`CORPUS_PATH` is unset or unreachable → `BLOCKED`, not `FAILED`.
 
 ---
 
