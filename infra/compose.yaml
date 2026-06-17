@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     environment:
       - FS_SANDBOX_ROOT=/data/corpus
-    volumes: ["/srv/corpus:/data/corpus:ro"]
+    volumes: ["/data/corpus:/data/corpus:ro"]
     ports: ["127.0.0.1:8103:8103"]
 
   ingester:
@@ -37,8 +37,8 @@ services:
     environment:
       - QDRANT_URL=http://qdrant:6333
       - EMBED_ENDPOINT=http://host.docker.internal:8090/embed  # NPU embedder on host
-      - CORPUS_ROOT=/data/corpus
-    volumes: ["/srv/corpus:/data/corpus:ro"]
+      - CORPUS_PATH=/data/corpus
+    volumes: ["/data/corpus:/data/corpus:ro"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [qdrant]
 

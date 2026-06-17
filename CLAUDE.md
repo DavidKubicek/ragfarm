@@ -106,6 +106,18 @@ apply, both defined inline in the flow below:
   and push your own changes, and `pull --rebase` before every push so you never
   clobber a change Dave pushed while idle.
 
+All later instructions — `git pull --rebase`, `docker compose -f infra/...`,
+`python services/ingester/...`, reading/writing BUILD_STATE.md and PROGRESS.md,
+the `logs/` paths — assume the current directory is `~dave/ragfarm`. If you are not
+in the repo directory, `cd` there first. The `/tmp/ragfarm.lock` path is absolute and
+unaffected.
+
+### Working directory (applies to every command in this file)
+The repo lives at `~dave/ragfarm` (the home dir also contains other files; the
+repo is the `ragfarm/` subdirectory, NOT $HOME itself). Every command, path, and
+git operation in this contract is relative to the repo root. Before doing anything
+else in a session:
+
 ### On session start
 0. **Refuse to start if another agent is live.** Before taking the heartbeat,
    inspect `/tmp/ragfarm.lock`:

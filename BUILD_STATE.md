@@ -167,11 +167,14 @@ assertion, propose a fix, and WAIT for Dave (do not edit the frozen files to mak
 the test pass).
 
 **Commands:**
+**Commands:**
 ```bash
+cd ~dave/ragfarm
+
 # 0. regression gate on the frozen parser (no services needed):
 FIXTURES=tests/fixtures python services/ingester/test_xlsx_tables.py
 
-# 1. bring up Qdrant:
+# 1. bring up Qdrant ONLY (the ingester runs on the host, not in a container):
 docker compose -f infra/compose.yaml up -d qdrant
 
 # 2. confirm step-03 embedder is live (ingester calls :8090/embed):
@@ -179,11 +182,16 @@ curl -s 127.0.0.1:8090/embed \
   -H 'Content-Type: application/json' \
   -d '{"input":["prod-kvm-03 10.20.1.43 VLAN203"],"kind":"passage"}' >/dev/null
 
-# 3. ingest a SMALL verification subset first (2-3 files incl. one messy xlsx),
-#    then the full corpus. --recreate rebuilds on schema/model change:
-python services/ingester/ingester.py --corpus "$CORPUS_PATH" --recreate
+# 3. confirm the corpus is present and non-empty BEFORE ingest (empty => BLOCKED,
+#    a 0-chunk run is a FAILURE not a pass):
+ls /data/corpus | head
 
-# 4. verify the collection and that both vector types are present:
+# 4. ingest on the HOST. Pass --corpus explicitly (do not rely on .env autoload;
+#    ingester.py reads CORPUS_PATH from the environment, and bare python does not
+#    load .env). --recreate rebuilds on schema/model change:
+python services/ingester/ingester.py --corpus /data/corpus --recreate
+
+# 5. verify the collection and that both vector types are present:
 curl -s 127.0.0.1:6333/collections/corpus | python3 -m json.tool
 ```
 

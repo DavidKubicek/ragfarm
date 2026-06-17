@@ -38,7 +38,7 @@ from xlsx_tables import iter_xlsx, point_id, clean_cell, _serialize_kv
 # --- config -----------------------------------------------------------------
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 EMBED      = os.environ.get("EMBED_ENDPOINT", "http://localhost:8090/embed")
-ROOT       = pathlib.Path(os.environ.get("CORPUS_PATH", "/srv/corpus"))
+ROOT       = pathlib.Path(os.environ.get("CORPUS_PATH", "/data/corpus"))
 COLL       = os.environ.get("QDRANT_COLLECTION", "corpus")
 DENSE_DIM  = 1024
 BATCH      = 64
