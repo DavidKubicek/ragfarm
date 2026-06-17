@@ -7,7 +7,8 @@ Reference implementation against docs/ingestion-pipeline.md. CPU embedder (BGE-M
 NOT the NPU. See ADR-0002.
 
 Routing:
-    .xlsx/.xls/.csv          -> table path (row-per-chunk, multi-table aware)
+    .xlsx/.xls               -> table path (services/ingester/xlsx_tables.py)
+    .csv                     -> table path (single-header CSV)
     .docx/.txt/.md/.markdown -> prose path (semantic chunks w/ overlap)
     .pdf                     -> prose path (text-layer extraction; scanned PDFs
                                 with no text layer are skipped with a warning)
@@ -15,37 +16,24 @@ Routing:
 Vectors:    named 'dense' (1024, cosine) + named sparse 'sparse'
 Idempotent: point ID = hash(source_file + sheet|heading + index); re-ingest overwrites.
 
-XLSX is NOT clean tables. The table path handles, all observed in real infra specs:
-  - summary/legend blocks ABOVE the real header (scored header detection)
-  - a sheet whose used range starts below row 1
-  - MULTIPLE stacked tables per sheet, each with its own header (often different
-    width) — split on a repeated header-shaped row
-  - blank separator rows between groups (all-blank across the table span)
-  - duplicate column names disambiguated by a merged super-header band
-  - three grouping encodings, all meaning "this label applies to a run of rows":
-      (1) dense repetition  — label on every row; nothing to do
-      (2) sparse carry-forward — label once, blank below; carried by a state
-          machine (arm on real value, carry across non-blank rows, DISARM on an
-          all-blank separator row)
-      (3) vertical merged range — label once in a merged cell spanning the rows;
-          propagated deterministically from merge metadata (rotation is display-
-          only). Common. Never combined with separators in the same region.
-    Grouping columns live in the left half (first ceil(width/2) cols).
-  - numbers stored as float (phone 603423146.0, VLAN 606.0) -> int cleanup
+ALL messy-XLSX structural handling (multi-table sheets, stacked headers, multi-row
+title+band headers, carry-forward and vertical-merge grouping, headerless data,
+trailing totals/notes trimming) now lives in xlsx_tables.py. This file keeps prose
+routing, embedding, and Qdrant upsert.
 """
 import os
 import re
 import sys
-import math
 import csv
-import uuid
 import logging
 import pathlib
-from typing import Iterator, Optional
+from typing import Iterator
 
 import requests
 from qdrant_client import QdrantClient
 from qdrant_client import models as qm
+
+from xlsx_tables import iter_xlsx, point_id, clean_cell, _serialize_kv
 
 # --- config -----------------------------------------------------------------
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
@@ -54,9 +42,6 @@ ROOT       = pathlib.Path(os.environ.get("CORPUS_PATH", "/srv/corpus"))
 COLL       = os.environ.get("QDRANT_COLLECTION", "corpus")
 DENSE_DIM  = 1024
 BATCH      = 64
-
-HEADER_SCAN_ROWS = 25
-MAX_TABLES_PER_SHEET = 50
 
 CHUNK_MIN_TOK = 256
 CHUNK_MAX_TOK = 384
@@ -69,12 +54,6 @@ try:
     from docx import Document
 except ImportError:
     Document = None
-try:
-    import openpyxl
-    from openpyxl import load_workbook
-    from openpyxl.utils import range_boundaries
-except ImportError:
-    openpyxl = None
 try:
     import pdfplumber
 except ImportError:
@@ -116,310 +95,9 @@ def detect_lang(text: str) -> str:
     return code if code in ("cs", "en") else "other"
 
 
-def point_id(*parts) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, ":".join(str(p) for p in parts)))
-
-
-def clean_cell(v) -> str:
-    """Stringify verbatim, fixing openpyxl's int-as-float (603423146.0 -> 603423146,
-    VLAN 606.0 -> 606). Identifiers must be verbatim for sparse exact-match."""
-    if v is None:
-        return ""
-    if isinstance(v, float) and v.is_integer():
-        return str(int(v))
-    return str(v).strip()
-
-
 # ============================================================================
-# TABLE PATH
+# TABLE PATH (CSV stays here; XLSX delegated to xlsx_tables.iter_xlsx)
 # ============================================================================
-_NUM_RE = re.compile(r"-?\d+(\.\d+)?$")
-
-
-def _is_numeric(v) -> bool:
-    if v is None:
-        return False
-    if isinstance(v, (int, float)):
-        return True
-    return bool(_NUM_RE.match(str(v).strip().replace(",", "")))
-
-
-def _fill_rgb(styled_cell) -> Optional[str]:
-    f = styled_cell.fill
-    if f and f.patternType:
-        rgb = f.fgColor.rgb
-        return rgb if isinstance(rgb, str) else None
-    return None
-
-
-def _row_nonempty_cols(wsv, ri, cmax) -> list:
-    return [ci for ci in range(1, cmax + 1)
-            if (v := wsv.cell(row=ri, column=ci).value) is not None and str(v).strip() != ""]
-
-
-def _detect_header_row(wsv, wss, start_ri, cmax, scan=HEADER_SCAN_ROWS) -> int:
-    """Scored header detection from start_ri downward. A header is recognized by
-    being more DISTINCT than its neighbours, not by uniform in-line formatting
-    (real headers carry random bold/font cells — that is noise). Signals:
-      + textual (non-numeric) and short labels  — headers are labels
-      + distinctness vs the FOLLOWING row (fill/bold differs => header/data edge)
-      + distinctness vs the PREVIOUS row         — same, catches directly-stacked
-        tables with no blank separator between them
-      + spans the data width                     — rejects narrow summary rows
-    Intra-row formatting uniformity is deliberately NOT required."""
-    rmax = wsv.max_row or start_ri
-    hi = min(start_ri + scan, rmax)
-    dens = {ri: len(_row_nonempty_cols(wsv, ri, cmax)) for ri in range(start_ri, min(hi + 5, rmax) + 1)}
-    maxdens = max(dens.values()) if dens else 0
-    best_ri, best = start_ri, -1.0
-    for ri in range(start_ri, hi + 1):
-        cols = _row_nonempty_cols(wsv, ri, cmax)
-        if not cols:
-            continue
-        n = len(cols)
-        vals = [wsv.cell(row=ri, column=ci).value for ci in cols]
-        nbold = sum(1 for ci in cols if wss.cell(row=ri, column=ci).font.bold)
-        nstr = sum(1 for v in vals if not _is_numeric(v))
-        nshort = sum(1 for v in vals if len(str(v).strip()) <= 40)
-        # distinctness vs following row: fill OR bold differs per column
-        def _distinct(other_ri):
-            d = 0
-            for ci in cols:
-                a = wss.cell(row=ri, column=ci)
-                b = wss.cell(row=other_ri, column=ci)
-                if _fill_rgb(a) != _fill_rgb(b) or bool(a.font.bold) != bool(b.font.bold):
-                    d += 1
-            return d / n
-        dist_below = _distinct(ri + 1) if ri + 1 <= rmax else 1.0
-        dist_above = _distinct(ri - 1) if ri - 1 >= 1 else 1.0
-        dmatch = maxdens > 0 and n >= 0.6 * maxdens
-        score = (2 * (nstr / n) + (nshort / n)
-                 + 1.5 * dist_below + 0.8 * dist_above
-                 + 0.5 * (nbold / n) + (2 if dmatch else 0))
-        if score > best:
-            best_ri, best = ri, score
-    return best_ri
-
-
-def _header_span(wsv, header_ri, cmax) -> tuple:
-    """Return (col_start, col_end) of the header's populated span. COL_START is the
-    FIRST non-empty header cell — tables do NOT necessarily begin at column 1;
-    people often start at col 2-3 to keep left-expansion room (SMAX starts at
-    col 2). Leading blanks are skipped regardless of their formatting."""
-    cols = _row_nonempty_cols(wsv, header_ri, cmax)
-    return (min(cols), max(cols)) if cols else (1, 1)
-
-
-def _is_all_blank(wsv, ri, c1, c2) -> bool:
-    """Separator test: every cell empty across the FULL table span [c1,c2]."""
-    return all(
-        (v := wsv.cell(row=ri, column=ci).value) is None or str(v).strip() == ""
-        for ci in range(c1, c2 + 1)
-    )
-
-
-def _is_new_table_header(wsv, wss, ri, c1, c2) -> bool:
-    """Boundary trigger for stacked tables: a row that is header-SHAPED —
-    formatting (bold/fill) AND text-or-blank only (no numbers) AND text>blank.
-    Detects a sub-table's own header regardless of whether its labels match the
-    first table's (old DC's second table is narrower with different columns)."""
-    cells = [wsv.cell(row=ri, column=ci).value for ci in range(c1, c2 + 1)]
-    ntext = sum(1 for v in cells if v is not None and str(v).strip() != "" and not _is_numeric(v))
-    nnum = sum(1 for v in cells if v is not None and str(v).strip() != "" and _is_numeric(v))
-    nblank = sum(1 for v in cells if v is None or str(v).strip() == "")
-    if nnum > 0:
-        return False
-    if ntext <= nblank:
-        return False
-    nbold = sum(1 for ci in range(c1, c2 + 1) if wss.cell(row=ri, column=ci).font.bold)
-    nfill = sum(1 for ci in range(c1, c2 + 1) if _fill_rgb(wss.cell(row=ri, column=ci)) is not None)
-    return (nbold >= ntext * 0.5) or (nfill >= ntext * 0.5)
-
-
-def _merged_bands(wss, header_ri, c1, c2) -> dict:
-    """col -> super-header label from a horizontal merge directly ABOVE the header
-    (disambiguates duplicate 'Hostname'/'IP address' host-vs-VM trios)."""
-    bands = {}
-    for mr in wss.merged_cells.ranges:
-        a, r1, b, r2 = range_boundaries(str(mr))
-        if r1 == r2 == header_ri - 1 and b > a:
-            label = wss.cell(row=r1, column=a).value
-            if label and str(label).strip():
-                for ci in range(a, b + 1):
-                    bands[ci] = str(label).strip()
-    return bands
-
-
-def _build_header(wsv, wss, header_ri, c1, c2) -> dict:
-    bands = _merged_bands(wss, header_ri, c1, c2)
-    keys, seen = {}, {}
-    for ci in range(c1, c2 + 1):
-        v = wsv.cell(row=header_ri, column=ci).value
-        if v is None or str(v).strip() == "":
-            continue
-        k = str(v).strip()
-        if ci in bands:
-            k = f"{bands[ci]} {k}"
-        if k in seen:
-            seen[k] += 1; k = f"{k} #{seen[k]}"
-        else:
-            seen[k] = 1
-        keys[ci] = k
-    return keys
-
-
-def _vmerge_map(wss, c1, c2, row_lo, row_hi) -> dict:
-    """col -> {row: value} for VERTICAL merged ranges, CLAMPED to [row_lo,row_hi]
-    so a merge in one sub-table never leaks into the next. Encoding (3)."""
-    m = {}
-    for mr in wss.merged_cells.ranges:
-        a, r1, b, r2 = range_boundaries(str(mr))
-        if a == b and r2 > r1 and c1 <= a <= c2:
-            lo, hi = max(r1, row_lo), min(r2, row_hi)
-            if lo > hi:
-                continue
-            val = wss.cell(row=r1, column=a).value
-            if val is None or str(val).strip() == "":
-                continue
-            m.setdefault(a, {})
-            for ri in range(lo, hi + 1):
-                m[a][ri] = val
-    return m
-
-
-def _cell_style(c) -> tuple:
-    """Minimal style fingerprint for the col[1]-vs-col[2] look-aside: bold,
-    italic, font color, fill. Any difference distinguishes a group-label column."""
-    try:
-        color = c.font.color.rgb if (c.font.color and isinstance(c.font.color.rgb, str)) else None
-    except Exception:
-        color = None
-    fill = None
-    if c.fill and c.fill.patternType and isinstance(c.fill.fgColor.rgb, str):
-        fill = c.fill.fgColor.rgb
-    return (bool(c.font.bold), bool(c.font.italic), color, fill)
-
-
-def _ff_candidate_cols(wsv, wss, keys, header_ri, end) -> set:
-    """Carry-forward is restricted to the FIRST column only, and only when that
-    column is a VISUALLY DISTINGUISHED group-label column — its formatting differs
-    from the second column. Rationale: grouping-by-omission is a leftmost-column
-    idiom and a minority feature; letting it touch any other column fabricates
-    data (e.g. smearing a one-off 'Application Name' down following rows). The
-    formatting gate (one cell look-aside, col1 vs col2) confirms col1 is a label
-    column, not just the first data column. If col1 looks like col2, carry-forward
-    is OFF for this table — no fabrication possible.
-
-    The style check is done on the first DATA row where col1 is populated (that is
-    where the group-label styling lives — bold/colored label vs plain data),
-    NOT the header row (where all cells share header styling)."""
-    cols = sorted(keys)
-    if len(cols) < 2:
-        return set()
-    col1, col2 = cols[0], cols[1]
-    probe = None
-    for rr in range(header_ri + 1, end + 1):
-        v = wsv.cell(row=rr, column=col1).value
-        if v is not None and str(v).strip() != "":
-            probe = rr
-            break
-    if probe is None:
-        return set()                               # col1 never populated -> nothing to carry
-    if _cell_style(wss.cell(row=probe, column=col1)) != _cell_style(wss.cell(row=probe, column=col2)):
-        return {col1}
-    return set()
-
-
-def _serialize_kv(keys: dict, values: dict, sheet: Optional[str]) -> Optional[str]:
-    parts = []
-    if sheet:
-        parts.append(f"sheet: {sheet}")
-    for ci, k in keys.items():
-        val = clean_cell(values.get(ci))
-        if val == "":
-            continue
-        parts.append(f"{k}: {val}")
-    return ", ".join(parts) if len(parts) > (1 if sheet else 0) else None
-
-
-def _iter_sheet_tables(wsv, wss, sheet, cmax, source_file) -> Iterator[dict]:
-    """Walk one sheet, splitting into stacked sub-tables, recovering grouping per
-    table. Yields serialized row records."""
-    rmax = wsv.max_row or 1
-    ri = wsv.min_row or 1
-    tnum = 0
-    guard = 0
-    while ri <= rmax and guard < MAX_TABLES_PER_SHEET:
-        guard += 1
-        header_ri = _detect_header_row(wsv, wss, ri, cmax)
-        c1, c2 = _header_span(wsv, header_ri, cmax)
-        keys = _build_header(wsv, wss, header_ri, c1, c2)
-        if not keys:
-            break
-        end = rmax
-        scan = header_ri + 1
-        while scan <= rmax:
-            if _is_new_table_header(wsv, wss, scan, c1, c2):
-                end = scan - 1
-                break
-            scan += 1
-        ff_cols = _ff_candidate_cols(wsv, wss, keys, header_ri, end)
-        vm = _vmerge_map(wss, c1, c2, header_ri + 1, end)
-        log.info("%s[%s] table#%d: header R%d span=%d..%d cols=%d ff=%d vmerge=%s rows<=%d",
-                 source_file, sheet, tnum, header_ri, c1, c2, len(keys), len(ff_cols),
-                 sorted(vm.keys()), end - header_ri)
-
-        carry = {}
-        ridx = 0
-        for rr in range(header_ri + 1, end + 1):
-            if _is_all_blank(wsv, rr, c1, c2):
-                carry = {}
-                continue
-            ridx += 1
-            values = {ci: wsv.cell(row=rr, column=ci).value for ci in keys}
-            for ci in keys:
-                if ci in vm and rr in vm[ci]:
-                    cur = values.get(ci)
-                    if cur is None or str(cur).strip() == "":
-                        values[ci] = vm[ci][rr]
-            for ci in ff_cols:
-                v = values.get(ci)
-                if v is not None and str(v).strip() != "":
-                    carry[ci] = v
-                elif ci in carry:
-                    values[ci] = carry[ci]
-            text = _serialize_kv(keys, values, sheet)
-            if not text:
-                continue
-            yield {
-                "id": point_id(source_file, sheet, tnum, ridx),
-                "text": text,
-                "payload": {
-                    "source_file": source_file, "sheet": sheet, "table": tnum,
-                    "row_index": ridx, "header_row": header_ri, "kind": "table_row",
-                    "lang": "n/a", "text": text,
-                },
-            }
-        tnum += 1
-        ri = end + 1
-        while ri <= rmax and _is_all_blank(wsv, ri, 1, cmax):
-            ri += 1
-
-
-def iter_xlsx(path: pathlib.Path) -> Iterator[dict]:
-    if openpyxl is None:
-        log.error("openpyxl not installed; cannot read %s", path)
-        return
-    wbv = openpyxl.load_workbook(path, data_only=True)
-    wbs = load_workbook(path)
-    for sheet in wbv.sheetnames:
-        wsv = wbv[sheet]; wss = wbs[sheet]
-        cmax = wsv.max_column or 1
-        if (wsv.max_row or 0) < 1 or cmax < 1:
-            continue
-        yield from _iter_sheet_tables(wsv, wss, sheet, cmax, path.name)
-
-
 def iter_csv(path: pathlib.Path) -> Iterator[dict]:
     with path.open(newline="", encoding="utf-8", errors="ignore") as fh:
         reader = csv.reader(fh)
@@ -479,7 +157,6 @@ def _chunk_paragraphs(paras: list[str]) -> Iterator[str]:
 
 
 def _emit_sections(path: pathlib.Path, sections: list) -> Iterator[dict]:
-    """sections: list of (heading, [paragraphs]). Chunk each, emit doc_text."""
     cidx = 0
     for heading, paras in sections:
         for chunk in _chunk_paragraphs(paras):
@@ -502,8 +179,6 @@ _MD_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
 
 def _sections_from_lines(lines: list, markdown: bool) -> list:
-    """Split plain/markdown text into (heading, paragraphs). For markdown, '#'
-    lines start sections; plain txt has no headings (paragraphs split on blanks)."""
     sections, heading, paras, buf = [], "", [], []
 
     def flush_para():
@@ -535,9 +210,6 @@ def iter_text(path: pathlib.Path, markdown: bool) -> Iterator[dict]:
 
 
 def iter_pdf(path: pathlib.Path) -> Iterator[dict]:
-    """Text-layer extraction (pdfplumber, layout-aware). A scanned PDF with no
-    text layer yields nothing -> skipped with a warning rather than silently
-    ingesting empty content. OCR is deliberately out of scope for batch ingest."""
     if pdfplumber is None:
         log.error("pdfplumber not installed; cannot read %s", path)
         return
