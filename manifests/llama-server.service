@@ -4,6 +4,8 @@ Description=llama.cpp server (Qwen2.5-7B-Instruct, Vulkan/iGPU)
 After=network-online.target
 [Service]
 User=dave
+# Optional repo-root .env (proxy vars etc.); leading `-` => no failure if absent.
+EnvironmentFile=-/home/dave/ragfarm/.env
 WorkingDirectory=/home/dave/llama.cpp
 ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
   -m /home/dave/ragfarm/models/gguf/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf \

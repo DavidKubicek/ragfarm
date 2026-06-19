@@ -2,6 +2,24 @@
 # llama-server and the NPU embedder run on the HOST (they need direct iGPU/NPU
 # device access via Vulkan / XRT), NOT in containers. Containers here are the
 # stateless/CPU pieces. host.docker.internal lets containers reach host llama-server.
+#
+# Proxy: each container that may reach the network inherits HTTP(S)_PROXY/NO_PROXY
+# from the shell via ${VAR:-} substitution. Run compose AFTER sourcing the loader,
+# which fills these (empty = direct) and guarantees NO_PROXY covers the internal
+# hosts so inter-container calls (-> qdrant, host.docker.internal) never proxy:
+#     source scripts/proxy-env.sh && docker compose -f infra/compose.yaml up -d
+# The `&proxy_env` anchor below is merged into each service's environment.
+# NOTE: image *pulls* go through the Docker daemon, not these vars — configure the
+# daemon's proxy separately (docs/ or /etc/systemd/system/docker.service.d/) if the
+# registry is only reachable via proxy.
+x-proxy-env: &proxy_env
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,qdrant}
+  http_proxy: ${HTTP_PROXY:-}
+  https_proxy: ${HTTPS_PROXY:-}
+  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,qdrant}
+
 services:
   qdrant:
     image: qdrant/qdrant:latest
@@ -13,6 +31,7 @@ services:
     build: ../services/mcp-infra-placement
     restart: unless-stopped
     env_file: [../services/mcp-infra-placement/.env]
+    environment: *proxy_env
     ports: ["127.0.0.1:8101:8101"]
     extra_hosts: ["host.docker.internal:host-gateway"]
 
@@ -20,6 +39,7 @@ services:
     build: ../services/mcp-host-control
     restart: unless-stopped
     env_file: [../services/mcp-host-control/.env]
+    environment: *proxy_env
     ports: ["127.0.0.1:8102:8102"]
     extra_hosts: ["host.docker.internal:host-gateway"]
 
@@ -27,7 +47,8 @@ services:
     build: ../services/mcp-fs-agent
     restart: unless-stopped
     environment:
-      - FS_SANDBOX_ROOT=/data/corpus
+      <<: *proxy_env
+      FS_SANDBOX_ROOT: /data/corpus
     volumes: ["/data/corpus:/data/corpus:ro"]
     ports: ["127.0.0.1:8103:8103"]
 
@@ -35,9 +56,10 @@ services:
     build: ../services/ingester
     restart: unless-stopped
     environment:
-      - QDRANT_URL=http://qdrant:6333
-      - EMBED_ENDPOINT=http://host.docker.internal:8090/embed  # NPU embedder on host
-      - CORPUS_PATH=/data/corpus
+      <<: *proxy_env
+      QDRANT_URL: http://qdrant:6333
+      EMBED_ENDPOINT: http://host.docker.internal:8090/embed  # NPU embedder on host
+      CORPUS_PATH: /data/corpus
     volumes: ["/data/corpus:/data/corpus:ro"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [qdrant]

@@ -32,6 +32,28 @@ measured numbers that justify it.
 - `services/` — MCP microservices + the ingester
 - `manifests/` — systemd units / env manifests per service
 
+## Network / proxy
+Outbound build traffic (PyPI, HuggingFace, container builds) honors a proxy via
+repo-root `.env` (gitignored, host-only — copy `.env.example`). Set `HTTP_PROXY`,
+`HTTPS_PROXY`, and optionally `NO_PROXY` there, then **source the loader before any
+networked build command**:
+
+```bash
+source scripts/proxy-env.sh        # loads .env, exports HTTP(S)_PROXY + NO_PROXY
+pip install -U FlagEmbedding ...   # now goes through the proxy
+docker compose -f infra/compose.yaml up -d   # containers inherit the proxy
+```
+
+The loader always merges an internal-host baseline
+(`localhost,127.0.0.1,::1,host.docker.internal,qdrant`) into `NO_PROXY`, so the
+stack's many localhost/inter-container calls (ingester→`:8090`/`:6333`, probes,
+`search_corpus`→Qdrant, Open WebUI→`:8080`, mcpo→MCP) never route at the proxy.
+List only *additional* bypass targets (on-prem LAN / OpenNebula subnet) in `.env`.
+
+Container image **pulls** go through the Docker daemon, not these vars — if your
+registry is reachable only via proxy, configure the daemon separately
+(`/etc/systemd/system/docker.service.d/http-proxy.conf`).
+
 ## Where to start (humans and agents)
 Read `HANDOFF.md` at the repo root. It is the authoritative build plan and is
 written so Claude Code can execute it autonomously.

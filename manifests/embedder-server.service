@@ -5,6 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=dave
+# Optional repo-root .env (proxy vars etc.); leading `-` => no failure if absent.
+# Placed before the explicit Environment= lines so those still take precedence.
+EnvironmentFile=-/home/dave/ragfarm/.env
 ExecStart=/opt/ryzenai/venv/bin/python /home/dave/ragfarm/services/embedder/server.py
 Environment=EMBED_MODEL_PATH=/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26
 Environment=XILINX_XRT=/opt/xilinx/xrt
