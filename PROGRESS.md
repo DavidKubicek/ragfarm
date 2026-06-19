@@ -43,3 +43,20 @@ UNBLOCKED: 01-npu-bringup — 2026-06-15T12:55Z
           forces all devices into isolated (translated) domains.
           After reboot: re-run `xrt-smi examine` and `python infra/npu/quicktest.py`
           to verify the gate (NPU Strix in examine output, "Test Finished" from quicktest).
+
+BLOCKED: 05-mcp-placement — 2026-06-18T11:30Z
+  need:   live OpenNebula access — ONE_XMLRPC endpoint + ONE_AUTH credentials,
+          and network reachability to the ON frontend
+  where:  .env keys ONE_XMLRPC, ONE_AUTH (shape in .env.example)
+  detail: PoC MiniPC is not yet placed on the live network; ON access lands at
+          deployment. The placement MCP code + XML parsing are unit-tested; only
+          the live one.vm.info/one.vmpool.info round-trip is unverified.
+
+BLOCKED: 06-mcp-fs-host-control — 2026-06-18T11:30Z
+  need:   live OpenNebula access (same as 05) before host-control real actions
+  where:  .env keys ONE_XMLRPC, ONE_AUTH
+  detail: fs-agent (sandboxed read) can be implemented and tested now, but
+          host-control's drain-then-reboot is via ON and cannot be verified
+          without a live cluster. Keep host-control dry-run/confirm-gated; do not
+          enable real actions until ON is reachable at deployment.
+
