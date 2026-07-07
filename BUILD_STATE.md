@@ -18,7 +18,7 @@ Reference the log file, do not parse it or reproduce it here.
 | 04 | qdrant-ingester     | DONE    | 2026-06-18T10:05Z | logs/04-qdrant-ingester.log    | Qdrant up, 138 chunks ingested (2 xlsx+1 docx), dense+sparse schema, hostname sparse hit + Czech dense hit pass |
 | 05 | mcp-placement       | BLOCKED | 2026-06-18T11:30Z | logs/05-mcp-placement.log      | no OpenNebula access in PoC; ON creds+reachability deferred to deployment (ADR-0003) |
 | 06 | mcp-fs-host-control | BLOCKED | 2026-06-18T11:30Z | logs/06-mcp-fs-host-control.log| host-control needs live ON (drain-reboot); deferred to deployment (ADR-0003) |
-| 07 | agent-wiring        | PENDING | 2026-07-07T08:45Z | logs/07-agent-wiring.log       | Stack built & up (rag-retrieval+mcpo+Open WebUI, host-net loopback); all boundaries verified; OWUI executed search_corpus via mcpo (evidenced); final UI grounded-answer gate needs interactive browser verify — NOT DONE |
+| 07 | agent-wiring        | DONE    | 2026-07-07T09:20Z | logs/07-agent-wiring.log       | Open WebUI + mcpo + rag-retrieval (search_corpus hybrid RRF); RAG-only gate PASSED in browser via 'ragfarm (corpus RAG)' preset (grounding prompt): sparse hostname + Czech dense both grounded. Full gate (where_is_vm) deferred — 05/06 BLOCKED |
 
 ---
 
