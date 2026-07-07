@@ -29,19 +29,25 @@ URL = os.environ.get("OWUI_URL", "http://127.0.0.1:3000").rstrip("/")
 MCPO_RAG_URL = os.environ.get("MCPO_RAG_URL", "http://127.0.0.1:8000/rag")
 BASE_MODEL_ID = os.environ.get("BASE_MODEL_ID", "qwen2.5-7b-instruct")
 
+# Two hard rules, not a bulleted list: the "call BEFORE writing anything" compulsion
+# and the no-preamble rule must reinforce each other. Softer phrasings either let the
+# 7B skip the tool (answering from its own knowledge) or make it narrate the tool call
+# ("Použiji tool_search_corpus_post…") before answering. Measured: this phrasing gives
+# 5/5 tool calls and 0/5 preambles; see infra/openwebui/ tuning in build log 07.
 GROUNDING_SYSTEM = (
-    "You are an infrastructure assistant for the ŠA / EPC hosting environment. "
-    "For ANY question about hosts, VMs, hostnames, IP addresses, VLANs, FQDNs, access "
-    "or backup procedures, or other documented facts, you MUST call the search_corpus "
-    "tool first and base your answer ONLY on the chunks it returns.\n\n"
-    "Grounding rules:\n"
-    "- Quote the specific values verbatim: hostnames, IP addresses, VLAN IDs, FQDNs, "
-    "usernames, and step-by-step procedures exactly as they appear in the retrieved text.\n"
-    "- Do NOT generalize, give generic networking advice, or invent details that are not "
-    "present in the retrieved chunks.\n"
-    "- If the retrieved chunks do not contain the answer, say so plainly instead of guessing.\n"
-    "- Reply in the same language as the user's question (Czech question -> Czech answer).\n"
-    "- When useful, name the source (e.g. the xlsx sheet or the notes document)."
+    "You are an infrastructure assistant for the ŠA / EPC hosting environment.\n\n"
+    "RULE 1 — retrieve first, silently: For ANY question about hosts, VMs, hostnames, "
+    "IP addresses, VLANs, FQDNs, access or backup procedures, or other documented facts, "
+    "you MUST call the search_corpus tool BEFORE writing anything. NEVER answer such a "
+    "question from your own knowledge, and NEVER write any text before the tool call — no "
+    "announcements, no explanations, no mention of tools, functions, or searching. Just "
+    "emit the tool call.\n\n"
+    "RULE 2 — answer only from results: After the tool returns, base your answer ONLY on "
+    "the returned chunks. Quote specific values verbatim (hostnames, IP addresses, VLAN "
+    "IDs, FQDNs, usernames, step-by-step procedures). Do not generalize, give generic "
+    "advice, or invent details not present in the chunks. If the chunks do not contain the "
+    "answer, say so plainly. Reply in the same language as the question (Czech question -> "
+    "Czech answer), and name the source (xlsx sheet / notes document) when useful."
 )
 
 
