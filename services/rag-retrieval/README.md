@@ -51,13 +51,26 @@ enable the **rag** tool, and ask e.g. *"What are the group, vCPU and RAM of host
 hsmbvxip001ts?"* and a Czech infra question. The model calls `search_corpus` and
 grounds its answer in the retrieved chunk.
 
-## Open WebUI wiring (one-time, persisted in its volume)
-- OpenAI endpoint: `OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1` (compose env).
-- Tool server: registered as `TOOL_SERVER_CONNECTIONS` → `http://127.0.0.1:8000/rag`
-  (OpenAPI), appears as tool id `server:0`. Configure under
-  Admin → Settings → Tools, or via `POST /api/v1/configs/tool_servers`.
-- Function calling: **native** (the 7B emits tool calls via llama-server `--jinja`).
-- Do **not** enable Open WebUI's own document RAG for the corpus (Option B).
+## Open WebUI wiring (reproducible)
+OpenAI endpoint is set by compose (`OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1`).
+The tool server + model preset are Open WebUI **volume state**, created reproducibly
+by `infra/openwebui/setup_openwebui.py` (re-runnable / idempotent):
+
+```bash
+OWUI_URL=http://127.0.0.1:3000 OWUI_TOKEN=<admin JWT> \
+  python3 infra/openwebui/setup_openwebui.py
+```
+It (1) registers the mcpo OpenAPI tool server `http://127.0.0.1:8000/rag`
+(appears as tool id `server:0`), and (2) creates the **"ragfarm (corpus RAG)"**
+model preset: base `qwen2.5-7b-instruct` + the `rag` tool pre-attached + **native**
+function calling + a **grounding system prompt**.
+
+The grounding prompt is load-bearing: without it the 7B tends to answer generic
+prose even when the exact chunk was retrieved; with it, the model quotes the
+retrieved hostnames/IPs/VLANs/steps verbatim. In the UI, just pick
+**"ragfarm (corpus RAG)"** and ask — no per-chat tool toggling needed.
+
+Do **not** enable Open WebUI's own document RAG for the corpus (Option B).
 
 ## Extending (at deployment, when 05/06 unblock)
 Add the OpenNebula-backed MCP servers to `services/mcp-gateway/mcpo-config.json`
