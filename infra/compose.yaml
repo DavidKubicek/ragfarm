@@ -89,5 +89,44 @@ services:
       RAG_PORT: "8104"
     depends_on: [qdrant]
 
+  # mcpo — bridges the MCP server(s) to OpenAPI so Open WebUI can call the tools
+  # (ADR-0003). Host networking to reach rag-retrieval at 127.0.0.1:8104; serves
+  # OpenAPI on 127.0.0.1:8000, each MCP mounted under /<name> (rag -> /rag).
+  # 05/06 (placement/host-control) are BLOCKED in the PoC; add them to
+  # mcpo-config.json when they unblock at deployment.
+  mcpo:
+    image: ghcr.io/open-webui/mcpo:main
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      <<: *proxy_env
+    volumes:
+      - ../services/mcp-gateway/mcpo-config.json:/config.json:ro
+    command: ["--host", "127.0.0.1", "--port", "8000", "--config", "/config.json"]
+    depends_on: [rag-retrieval]
+
+  # open-webui — the agent/UI layer (ADR-0003). Drives the swappable OpenAI
+  # endpoint (llama-server on 127.0.0.1:8080) and calls MCP tools via the mcpo
+  # OpenAPI server (127.0.0.1:8000). Its built-in document RAG is NOT used for the
+  # corpus (Option B) — retrieval flows through search_corpus. Host networking to
+  # reach the loopback host services; binds 127.0.0.1:3000 (SSH-forward to reach
+  # the UI from a laptop), avoiding the :8080 clash with llama-server.
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      <<: *proxy_env
+      HOST: 127.0.0.1
+      PORT: "3000"
+      OPENAI_API_BASE_URL: http://127.0.0.1:8080/v1
+      OPENAI_API_KEY: sk-no-auth-local    # llama-server ignores auth; placeholder keeps OWUI happy
+      ENABLE_OPENAI_API: "true"
+      ENABLE_OLLAMA_API: "false"
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on: [mcpo]
+
 volumes:
   qdrant_data:
+  openwebui_data:
