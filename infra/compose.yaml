@@ -30,7 +30,11 @@ services:
   mcp-infra-placement:
     build: ../services/mcp-infra-placement
     restart: unless-stopped
-    env_file: [../services/mcp-infra-placement/.env]
+    # BLOCKED in PoC (no OpenNebula creds yet); .env is filled at deployment, so
+    # mark it optional or every full-config compose command fails until then.
+    env_file:
+      - path: ../services/mcp-infra-placement/.env
+        required: false
     environment: *proxy_env
     ports: ["127.0.0.1:8101:8101"]
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -38,7 +42,9 @@ services:
   mcp-host-control:
     build: ../services/mcp-host-control
     restart: unless-stopped
-    env_file: [../services/mcp-host-control/.env]
+    env_file:
+      - path: ../services/mcp-host-control/.env
+        required: false
     environment: *proxy_env
     ports: ["127.0.0.1:8102:8102"]
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -62,6 +68,25 @@ services:
       CORPUS_PATH: /data/corpus
     volumes: ["/data/corpus:/data/corpus:ro"]
     extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [qdrant]
+
+  # rag-retrieval — search_corpus (hybrid dense+sparse RRF over Qdrant + host
+  # embedder). ADR-0003 Option B: the corpus RAG tool lives here, not in the UI.
+  # HOST NETWORKING: the generative LLM (:8080) and BGE-M3 embedder (:8090) run on
+  # the host bound to 127.0.0.1 (loopback-only, not exposed to the LAN). Host
+  # networking lets this container reach them at 127.0.0.1 without widening their
+  # bind. It listens on 127.0.0.1:8104 (RAG_HOST) so it too stays loopback-only.
+  rag-retrieval:
+    build: ../services/rag-retrieval
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      <<: *proxy_env
+      QDRANT_URL: http://127.0.0.1:6333
+      EMBED_ENDPOINT: http://127.0.0.1:8090/embed  # BGE-M3 embedder on host (loopback)
+      QDRANT_COLLECTION: corpus
+      RAG_HOST: 127.0.0.1
+      RAG_PORT: "8104"
     depends_on: [qdrant]
 
 volumes:
