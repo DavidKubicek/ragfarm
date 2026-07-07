@@ -42,6 +42,7 @@ If either file is absent → this step is `BLOCKED`, not `FAILED`. Append a
 
 **Commands:**
 ```bash
+source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); installer fetches packages
 ls -l ~/Downloads/ryzenai/RAI_1.7.1_Linux_NPU_XRT.zip ~/Downloads/ryzenai/ryzen_ai-1.7.1.tgz
 bash infra/npu/install_npu.sh
 source /opt/xilinx/xrt/setup.sh
@@ -61,6 +62,7 @@ drives this endpoint. Follow `infra/llama/README.md` for build specifics.
 
 **Commands:**
 ```bash
+source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); build clones/fetches deps + GGUF
 # Build per infra/llama/README.md (Vulkan backend), then place the GGUF:
 #   models/gguf/Qwen2.5-7B-Instruct-Q4_K_M.gguf
 # Launch llama-server (Vulkan, OpenAI-compatible, tool-calling on):
@@ -108,6 +110,7 @@ host/IP/VLAN token matches). Record model + resolved revision in
 
 **Commands:**
 ```bash
+source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); pip + HF snapshot_download need egress
 # Remove dead NPU-era embedder artifacts before rebuilding on CPU:
 rm -rf models/embeddings/bge-small-en-v1.5-onnx-static/
 find models/embeddings/ -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
@@ -169,6 +172,7 @@ the test pass).
 **Commands:**
 ```bash
 cd ~dave/ragfarm
+source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); sets NO_PROXY so 127.0.0.1 probes + compose containers bypass any proxy
 
 # 0. regression gate on the frozen parser (no services needed):
 FIXTURES=tests/fixtures python services/ingester/test_xlsx_tables.py
@@ -282,6 +286,7 @@ semantic search both work from one tool.
 **Commands:**
 ```bash
 cd ~dave/ragfarm
+source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); mcpo/Open WebUI bring-up fetches deps, NO_PROXY keeps 127.0.0.1 + container calls direct
 
 # 1. ensure llama-server (step 02) and the embedder (step 03) are up, Qdrant
 #    (step 04) is up and the `corpus` collection is populated.
