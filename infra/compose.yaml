@@ -109,15 +109,18 @@ services:
   # endpoint (llama-server on 127.0.0.1:8080) and calls MCP tools via the mcpo
   # OpenAPI server (127.0.0.1:8000). Its built-in document RAG is NOT used for the
   # corpus (Option B) — retrieval flows through search_corpus. Host networking to
-  # reach the loopback host services; binds 127.0.0.1:3000 (SSH-forward to reach
-  # the UI from a laptop), avoiding the :8080 clash with llama-server.
+  # reach the loopback host services, avoiding the :8080 clash with llama-server.
+  # EXPOSURE: this is the ONLY service bound to 0.0.0.0 (OWUI_HOST) — remote web
+  # access to the PoC. It is login-protected (WEBUI_AUTH on by default). The LLM
+  # (:8080), embedder (:8090), mcpo (:8000) and rag-retrieval (:8104) stay
+  # loopback-only. Restrict :3000 at the host firewall to trusted networks.
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
     network_mode: host
     environment:
       <<: *proxy_env
-      HOST: 127.0.0.1
+      HOST: ${OWUI_HOST:-0.0.0.0}    # 0.0.0.0 = reachable remotely (auth-gated); set 127.0.0.1 for loopback-only
       PORT: "3000"
       OPENAI_API_BASE_URL: http://127.0.0.1:8080/v1
       OPENAI_API_KEY: sk-no-auth-local    # llama-server ignores auth; placeholder keeps OWUI happy

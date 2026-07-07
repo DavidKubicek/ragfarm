@@ -1,0 +1,37 @@
+# /etc/systemd/system/ragfarm-stack.service
+# Brings up the containerized ragfarm layer (qdrant + rag-retrieval + mcpo +
+# open-webui) on boot as a single unit. The containers also carry
+# restart: unless-stopped, so a normal reboot already restarts them while docker
+# is enabled; this unit additionally guarantees the whole stack comes up even if
+# it was explicitly stopped, orders it after the host services, and gives one
+# control point (systemctl start/stop ragfarm-stack).
+#
+# Install (one-time, as root):
+#   sudo cp manifests/ragfarm-stack.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ragfarm-stack.service
+#
+# The host services (llama-server, embedder) have their own units and must be
+# enabled separately; this stack tolerates them starting late (containers retry).
+[Unit]
+Description=ragfarm container stack (qdrant, rag-retrieval, mcpo, open-webui)
+Requires=docker.service
+After=docker.service network-online.target llama-server.service embedder-server.service
+Wants=network-online.target llama-server.service embedder-server.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+User=dave
+WorkingDirectory=/home/dave/ragfarm
+# Load repo-root .env proxy vars (no-op if unset), then bring up ONLY the
+# operational PoC services. The step 05/06 services (mcp-infra-placement,
+# mcp-host-control, mcp-fs-agent, ingester) are BLOCKED/stubs with empty
+# Dockerfiles — listing services explicitly avoids trying to build them on boot.
+# `docker compose` needs no sudo (dave is in the docker group).
+ExecStart=/bin/bash -lc 'source scripts/proxy-env.sh && /usr/bin/docker compose -f infra/compose.yaml up -d qdrant rag-retrieval mcpo open-webui'
+ExecStop=/usr/bin/docker compose -f /home/dave/ragfarm/infra/compose.yaml stop qdrant rag-retrieval mcpo open-webui
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
