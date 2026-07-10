@@ -43,26 +43,33 @@ class Tools:
             return f"Cannot plan reboot of {hostname}: {plan.get('reason')}"
 
         p = plan.get("plan", {})
-        steps = "\n".join(f"  - {s}" for s in p.get("steps", []))
+        vms = p.get("vms_to_drain", [])
+        vm_lines = "\n".join(f"  •  {v['name']}  (VM {v['vm_id']})" for v in vms) or "  •  (none)"
+        # ---- confirmation dialog text (edit here; no container rebuild needed) ----
         preview = (
-            f"Host: {hostname}\n"
-            f"Reason: {reason or '(none given)'}\n"
-            f"{p.get('summary', '')}\n"
-            f"Allowlisted: {plan.get('allowlisted')}   Mock: {plan.get('mock')}\n"
-            f"Steps:\n{steps}"
+            f"You are about to drain and reboot hypervisor {hostname}.\n\n"
+            f"Reason:  {reason or '—'}\n\n"
+            f"{len(vms)} running VM(s) will be live-migrated to other hosts first:\n"
+            f"{vm_lines}\n\n"
+            f"Sequence:\n"
+            f"  1.  Live-migrate the VMs above off {hostname}\n"
+            f"  2.  Wait until {hostname} is empty\n"
+            f"  3.  Reboot {hostname}\n"
+            f"  4.  Wait for {hostname} to rejoin the cluster\n\n"
+            f"Approve to proceed."
         )
 
         # 2. human confirmation modal — refuse to act without an interactive session
         if __event_call__ is None:
-            return "No interactive session to confirm in; refusing to act.\n\n" + preview
+            return "This action requires interactive confirmation and cannot run headlessly."
         approved = await __event_call__(
             {
                 "type": "confirmation",
-                "data": {"title": f"Reboot {hostname}?", "message": preview},
+                "data": {"title": f"Reboot hypervisor {hostname}?", "message": preview},
             }
         )
         if not approved:
-            return f"Reboot of {hostname} CANCELLED by user — no action taken.\n\n{preview}"
+            return f"Reboot of {hostname} was cancelled. No changes were made."
 
         # 3. execute (confirm=True); server-side allowlist still gates this
         res = requests.post(
@@ -70,8 +77,10 @@ class Tools:
             json={"hostname": hostname, "confirm": True}, timeout=60,
         ).json()
         if not res.get("ok"):
-            return f"Reboot refused by host-control: {res.get('reason')}"
+            return f"Reboot could not proceed: {res.get('reason')}."
+        drained = res.get("drained", [])
+        names = ", ".join(v["name"] for v in drained) or "no"
         return (
-            f"Reboot executed for {hostname}: {res.get('note')}. "
-            f"Drained {len(res.get('drained', []))} VM(s)."
+            f"{hostname} has been rebooted successfully. {len(drained)} VM(s) "
+            f"({names}) were live-migrated beforehand, and {hostname} has rejoined the cluster."
         )

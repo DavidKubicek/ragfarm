@@ -122,7 +122,7 @@ def where_is_vm(vm: str) -> dict:
             raise LookupError(f"No VM matching {vm!r} (mock)")
         return {"vm_id": r["vm_id"], "name": r["name"], "state": "ACTIVE",
                 "lcm_state": "RUNNING", "host": r["host"], "host_id": r["host_id"],
-                "cluster_id": r["cluster_id"], "running": True, "mock": True}
+                "cluster_id": r["cluster_id"], "running": True}
     try:
         vm_id = int(vm)
     except ValueError:
@@ -146,7 +146,7 @@ def list_vms_on_host(hostname: str) -> dict:
     if ONE_MOCK:
         out = [{"vm_id": r["vm_id"], "name": r["name"], "lcm_state": "RUNNING"}
                for r in _MOCK_VMS if r["host"] == hostname]
-        return {"host": hostname, "count": len(out), "vms": out, "mock": True}
+        return {"host": hostname, "count": len(out), "vms": out}
     xml_str = _one_call("one.vmpool.info", -2, -1, -1, 3)  # state 3 = ACTIVE
     root = ET.fromstring(xml_str)
     out = []
