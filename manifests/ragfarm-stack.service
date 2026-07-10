@@ -24,13 +24,13 @@ Type=oneshot
 RemainAfterExit=true
 User=dave
 WorkingDirectory=/home/dave/ragfarm
-# Load repo-root .env proxy vars (no-op if unset), then bring up ONLY the
-# operational PoC services. The step 05/06 services (mcp-infra-placement,
-# mcp-host-control, mcp-fs-agent, ingester) are BLOCKED/stubs with empty
-# Dockerfiles — listing services explicitly avoids trying to build them on boot.
+# Load repo-root .env proxy vars (no-op if unset), then bring up the operational
+# PoC services explicitly. placement + host-control run in MOCK mode by default
+# (ONE_MOCK/HOST_MOCK) so the agent + confirmation UX work with no OpenNebula.
+# (mcp-fs-agent + ingester are omitted — not part of the running agent path.)
 # `docker compose` needs no sudo (dave is in the docker group).
-ExecStart=/bin/bash -lc 'source scripts/proxy-env.sh && /usr/bin/docker compose -f infra/compose.yaml up -d qdrant rag-retrieval mcpo open-webui'
-ExecStop=/usr/bin/docker compose -f /home/dave/ragfarm/infra/compose.yaml stop qdrant rag-retrieval mcpo open-webui
+ExecStart=/bin/bash -lc 'source scripts/proxy-env.sh && /usr/bin/docker compose -f infra/compose.yaml up -d qdrant rag-retrieval mcp-infra-placement mcp-host-control mcpo open-webui'
+ExecStop=/usr/bin/docker compose -f /home/dave/ragfarm/infra/compose.yaml stop qdrant rag-retrieval mcp-infra-placement mcp-host-control mcpo open-webui
 TimeoutStartSec=300
 
 [Install]

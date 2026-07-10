@@ -23,9 +23,29 @@ from mcp.server.fastmcp import FastMCP
 ONE_XMLRPC = os.environ.get("ONE_XMLRPC", "http://opennebula.infra.local:2633/RPC2")
 # OpenNebula auth is "user:password" (or user:token). Keep it in .env / secret store.
 ONE_AUTH = os.environ.get("ONE_AUTH", "oneadmin:CHANGEME")
+# ONE_MOCK=1 -> serve canned placement data instead of hitting live OpenNebula, so
+# the OWUI/LLM integration ("envelope") and the confirmation UX can be exercised
+# with no cluster. Clearly a test mock; outputs carry "mock": true.
+ONE_MOCK = os.environ.get("ONE_MOCK", "").lower() in ("1", "true", "yes")
 
 mcp = FastMCP("infra-placement", host="0.0.0.0", port=8101)
 _proxy = xmlrpc.client.ServerProxy(ONE_XMLRPC, allow_none=True)
+
+# --- MOCK fixture (shared conceptually with mcp-host-control's mock) ------------
+_MOCK_VMS = [
+    {"vm_id": 101, "name": "web-prod-1", "host": "node-01", "host_id": "1", "cluster_id": "100"},
+    {"vm_id": 102, "name": "web-prod-2", "host": "node-02", "host_id": "2", "cluster_id": "100"},
+    {"vm_id": 103, "name": "db-prod-1",  "host": "node-01", "host_id": "1", "cluster_id": "100"},
+    {"vm_id": 104, "name": "sftp-gw",    "host": "node-03", "host_id": "3", "cluster_id": "100"},
+    {"vm_id": 105, "name": "cache-1",    "host": "node-02", "host_id": "2", "cluster_id": "100"},
+]
+
+
+def _mock_lookup(vm: str):
+    for r in _MOCK_VMS:
+        if str(r["vm_id"]) == str(vm) or r["name"] == vm:
+            return r
+    return None
 
 
 # --- OpenNebula state code -> human label (subset that matters operationally) ---
@@ -96,6 +116,13 @@ def where_is_vm(vm: str) -> dict:
     Returns the VM's name, lifecycle state, and the host (hypervisor) it is
     currently placed on according to OpenNebula's scheduler/history.
     """
+    if ONE_MOCK:
+        r = _mock_lookup(vm)
+        if not r:
+            raise LookupError(f"No VM matching {vm!r} (mock)")
+        return {"vm_id": r["vm_id"], "name": r["name"], "state": "ACTIVE",
+                "lcm_state": "RUNNING", "host": r["host"], "host_id": r["host_id"],
+                "cluster_id": r["cluster_id"], "running": True, "mock": True}
     try:
         vm_id = int(vm)
     except ValueError:
@@ -116,6 +143,10 @@ def where_is_vm(vm: str) -> dict:
 @mcp.tool()
 def list_vms_on_host(hostname: str) -> dict:
     """List VMs currently placed on a given host (hypervisor) by hostname."""
+    if ONE_MOCK:
+        out = [{"vm_id": r["vm_id"], "name": r["name"], "lcm_state": "RUNNING"}
+               for r in _MOCK_VMS if r["host"] == hostname]
+        return {"host": hostname, "count": len(out), "vms": out, "mock": True}
     xml_str = _one_call("one.vmpool.info", -2, -1, -1, 3)  # state 3 = ACTIVE
     root = ET.fromstring(xml_str)
     out = []

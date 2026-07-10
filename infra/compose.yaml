@@ -30,22 +30,31 @@ services:
   mcp-infra-placement:
     build: ../services/mcp-infra-placement
     restart: unless-stopped
-    # BLOCKED in PoC (no OpenNebula creds yet); .env is filled at deployment, so
-    # mark it optional or every full-config compose command fails until then.
+    # BLOCKED for LIVE use in PoC (no OpenNebula creds yet); .env is filled at
+    # deployment, so mark it optional or full-config compose commands fail.
+    # ONE_MOCK defaults to 1 (canned data) so the integration can be tested with no
+    # cluster; set ONE_MOCK=0 once real ONE_XMLRPC/ONE_AUTH are in .env.
     env_file:
       - path: ../services/mcp-infra-placement/.env
         required: false
-    environment: *proxy_env
+    environment:
+      <<: *proxy_env
+      ONE_MOCK: ${ONE_MOCK:-1}
     ports: ["127.0.0.1:8101:8101"]
     extra_hosts: ["host.docker.internal:host-gateway"]
 
   mcp-host-control:
     build: ../services/mcp-host-control
     restart: unless-stopped
+    # HOST_MOCK defaults to 1 (simulated drain/reboot, nothing real); set HOST_MOCK=0
+    # at deployment. HOST_ALLOWLIST gates confirm=True actions (mock nodes here).
     env_file:
       - path: ../services/mcp-host-control/.env
         required: false
-    environment: *proxy_env
+    environment:
+      <<: *proxy_env
+      HOST_MOCK: ${HOST_MOCK:-1}
+      HOST_ALLOWLIST: ${HOST_ALLOWLIST:-node-01,node-02,node-03}
     ports: ["127.0.0.1:8102:8102"]
     extra_hosts: ["host.docker.internal:host-gateway"]
 

@@ -23,11 +23,16 @@ Config knobs (env, with sensible defaults):
 """
 import os
 import sys
+import pathlib
 import requests
 
 URL = os.environ.get("OWUI_URL", "http://127.0.0.1:3000").rstrip("/")
 MCPO_RAG_URL = os.environ.get("MCPO_RAG_URL", "http://127.0.0.1:8000/rag")
+MCPO_PLACEMENT_URL = os.environ.get("MCPO_PLACEMENT_URL", "http://127.0.0.1:8000/placement")
 BASE_MODEL_ID = os.environ.get("BASE_MODEL_ID", "qwen2.5-7b-instruct")
+# host-control is bridged by mcpo but deliberately NOT registered as an OWUI tool
+# server; the model reaches reboot only through the reboot_guarded Python Tool.
+REBOOT_TOOL_PY = pathlib.Path(__file__).with_name("tools") / "reboot_guarded.py"
 
 # Two hard rules, not a bulleted list: the "call BEFORE writing anything" compulsion
 # and the no-preamble rule must reinforce each other. Softer phrasings either let the
@@ -36,18 +41,17 @@ BASE_MODEL_ID = os.environ.get("BASE_MODEL_ID", "qwen2.5-7b-instruct")
 # 5/5 tool calls and 0/5 preambles; see infra/openwebui/ tuning in build log 07.
 GROUNDING_SYSTEM = (
     "You are an infrastructure assistant for the ŠA / EPC hosting environment.\n\n"
-    "RULE 1 — retrieve first, silently: For ANY question about hosts, VMs, hostnames, "
-    "IP addresses, VLANs, FQDNs, access or backup procedures, or other documented facts, "
-    "you MUST call the search_corpus tool BEFORE writing anything. NEVER answer such a "
-    "question from your own knowledge, and NEVER write any text before the tool call — no "
-    "announcements, no explanations, no mention of tools, functions, or searching. Just "
-    "emit the tool call.\n\n"
-    "RULE 2 — answer only from results: After the tool returns, base your answer ONLY on "
-    "the returned chunks. Quote specific values verbatim (hostnames, IP addresses, VLAN "
-    "IDs, FQDNs, usernames, step-by-step procedures). Do not generalize, give generic "
-    "advice, or invent details not present in the chunks. If the chunks do not contain the "
-    "answer, say so plainly. Reply in the same language as the question (Czech question -> "
-    "Czech answer), and name the source (xlsx sheet / notes document) when useful."
+    "RULE 1 — act via tools first, silently: choose the right tool and call it BEFORE "
+    "writing anything. NEVER answer from your own knowledge, and NEVER write text before a "
+    "tool call — no announcements, no explanations, no mention of tools/functions. Routing:\n"
+    "  - documented facts (hosts, IPs, VLANs, FQDNs, access/backup procedures) -> search_corpus\n"
+    "  - where a VM runs / what runs on a host (live placement) -> where_is_vm / list_vms_on_host\n"
+    "  - reboot/restart/bounce a hypervisor host -> reboot_host (it will require the user to confirm)\n\n"
+    "RULE 2 — answer only from results: base your answer ONLY on what the tools return. "
+    "Quote specific values verbatim (hostnames, IPs, VLAN IDs, FQDNs, VM names, steps). Do "
+    "not generalize or invent. If a tool reports it cannot find or do something (e.g. a "
+    "reboot was cancelled or a host is not allowlisted), say exactly that. Reply in the same "
+    "language as the question (Czech question -> Czech answer); name the source when useful."
 )
 
 
@@ -69,34 +73,51 @@ def get_token() -> str:
     sys.exit("Could not obtain a token via signin/signup.")
 
 
+def _tool_server(url, name, desc):
+    return {"url": url, "path": "openapi.json", "auth_type": "none", "key": "",
+            "config": {"enable": True, "access_control": None},
+            "info": {"name": name, "description": desc}}
+
+
 def main() -> None:
     tok = get_token()
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
 
-    # 1. Register the mcpo OpenAPI tool server (search_corpus) as tool id server:<n>.
-    conn = {
-        "url": MCPO_RAG_URL, "path": "openapi.json", "auth_type": "none", "key": "",
-        "config": {"enable": True, "access_control": None},
-        "info": {"name": "rag", "description": "Corpus hybrid retrieval (search_corpus)"},
-    }
+    # 1. Register the read-only mcpo tool servers, in order -> server:0, server:1.
+    #    host-control is intentionally absent so the model cannot call reboot directly.
+    conns = [
+        _tool_server(MCPO_RAG_URL, "rag", "Corpus hybrid retrieval (search_corpus)"),
+        _tool_server(MCPO_PLACEMENT_URL, "placement", "OpenNebula placement (where_is_vm, list_vms_on_host)"),
+    ]
     r = requests.post(URL + "/api/v1/configs/tool_servers", headers=H,
-                      json={"TOOL_SERVER_CONNECTIONS": [conn]}, timeout=30)
+                      json={"TOOL_SERVER_CONNECTIONS": conns}, timeout=30)
     r.raise_for_status()
-    print(f"tool server registered: {MCPO_RAG_URL}")
+    server_ids = [f"server:{i}" for i in range(len(conns))]  # order-defined
+    print(f"tool servers registered: {[c['url'] for c in conns]} -> {server_ids}")
 
-    # Resolve the tool id (server:<idx>) the connection got.
-    tools = requests.get(URL + "/api/v1/tools/", headers=H, timeout=30).json()
-    rag_tool_id = next((t["id"] for t in tools if t.get("name") == "rag"
-                        or str(t.get("id", "")).startswith("server:")), "server:0")
+    # 2. Create/update the reboot_guarded Python Tool (human-confirmation gate).
+    tool_body = {
+        "id": "reboot_guarded",
+        "name": "Guarded host reboot",
+        "content": REBOOT_TOOL_PY.read_text(),
+        "meta": {"description": "Drain-then-reboot a hypervisor behind a confirmation modal."},
+        "access_grants": [],
+    }
+    r = requests.post(URL + "/api/v1/tools/create", headers=H, json=tool_body, timeout=30)
+    if r.status_code != 200:
+        r = requests.post(URL + "/api/v1/tools/id/reboot_guarded/update", headers=H, json=tool_body, timeout=30)
+    r.raise_for_status()
+    print("python tool 'reboot_guarded' ready")
 
-    # 2. Create/update the ragfarm model preset.
+    # 3. Create/update the ragfarm preset with all three tools attached.
+    tool_ids = server_ids + ["reboot_guarded"]
     body = {
         "id": "ragfarm",
         "base_model_id": BASE_MODEL_ID,
-        "name": "ragfarm (corpus RAG)",
+        "name": "ragfarm (corpus RAG + infra)",
         "meta": {
-            "description": "Qwen2.5-7B with corpus retrieval (search_corpus) pre-attached and a grounding prompt.",
-            "toolIds": [rag_tool_id],
+            "description": "Qwen2.5-7B with corpus retrieval, OpenNebula placement, and guarded host reboot.",
+            "toolIds": tool_ids,
             "capabilities": {"citations": True},
         },
         "params": {"system": GROUNDING_SYSTEM, "function_calling": "native"},
@@ -105,10 +126,9 @@ def main() -> None:
     }
     r = requests.post(URL + "/api/v1/models/create", headers=H, json=body, timeout=30)
     if r.status_code != 200:
-        # already exists (or otherwise) -> update in place (id is carried in the body)
         r = requests.post(URL + "/api/v1/models/model/update", headers=H, json=body, timeout=30)
     r.raise_for_status()
-    print(f"model preset 'ragfarm (corpus RAG)' ready (tool={rag_tool_id}, base={BASE_MODEL_ID})")
+    print(f"model preset 'ragfarm' ready (tools={tool_ids}, base={BASE_MODEL_ID})")
 
 
 if __name__ == "__main__":

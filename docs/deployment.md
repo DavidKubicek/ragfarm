@@ -57,6 +57,26 @@ agent loop is confirmed in the browser (it is finicky to drive headlessly — th
 one non-obvious requirement is `assistant_message_id` **in the chat/completions
 request body**, encoded in the script).
 
+## OpenNebula MCPs — mock mode & the confirmation gate (ADR-0004)
+Until live OpenNebula exists, `mcp-infra-placement` and `mcp-host-control` run in
+**mock mode** (`ONE_MOCK`/`HOST_MOCK` default to 1 in compose) against canned
+VM↔host data, so the agent path and the human-in-the-loop UX are testable with no
+cluster. Set `ONE_MOCK=0`/`HOST_MOCK=0` (and fill `.env`) at deployment.
+
+- **Read-only tools** (`where_is_vm`, `list_vms_on_host`) are exposed to the model
+  via mcpo (`/placement`) as tool server `server:1`.
+- **The mutating op is gated.** `host-control` is bridged by mcpo but **deliberately
+  NOT registered as an OWUI tool server** — the model cannot call reboot directly.
+  It goes only through the OWUI native Python Tool `infra/openwebui/tools/reboot_guarded.py`,
+  which: dry-runs to get the plan → shows it in a blocking `__event_call__`
+  confirmation modal → executes with `confirm=True` only on human approval. The
+  server-side allowlist (`HOST_ALLOWLIST`) + `confirm` gate still apply underneath.
+  This is the ADR-0004 pattern: the LLM is out of the confirm loop; the human is the gate.
+- `setup_openwebui.py` registers both tool servers, creates the Python Tool, and
+  attaches all three (`server:0` rag, `server:1` placement, `reboot_guarded`) to the
+  `ragfarm` preset. `__event_call__` modals require an interactive UI session (they
+  do not fire on headless/API calls — correct for human confirmation).
+
 ## What changes on prod NVIDIA hardware
 Per ADR-0003 the durable layer (Open WebUI, mcpo, MCP servers, `search_corpus`,
 Qdrant) is HW-agnostic and should NOT be re-architected. Concrete changes:

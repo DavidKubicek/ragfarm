@@ -3,6 +3,14 @@
     "rag": {
       "type": "streamable-http",
       "url": "http://127.0.0.1:8104/mcp"
+    },
+    "placement": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8101/mcp"
+    },
+    "host-control": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8102/mcp"
     }
   }
 }
