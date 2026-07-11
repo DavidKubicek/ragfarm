@@ -27,7 +27,7 @@ Open WebUI layer (valuable but flaky headless — see build log 07):
 
 Env knobs (all optional, sane defaults):
   OWUI_URL=http://127.0.0.1:3000   MCPO_URL=http://127.0.0.1:8000
-  LLAMA_URL=http://127.0.0.1:8080   MCPO_CONTAINER=infra-mcpo-1
+  LLAMA_URL=http://127.0.0.1:8080   MCPO_CONTAINER=infra-mcpo
   OWUI_MODEL=ragfarm  RAG_TOOL_ID=server:0
   OWUI_TOKEN=<jwt>  (or OWUI_EMAIL + OWUI_PASSWORD to sign in)
   HOSTNAME_PROBE=hsmbvxip001ts   CZECH_PROBE="Jak se přistupuje z ŠA do hostingu?"
@@ -42,7 +42,7 @@ import requests
 OWUI = os.environ.get("OWUI_URL", "http://127.0.0.1:3000").rstrip("/")
 MCPO = os.environ.get("MCPO_URL", "http://127.0.0.1:8000").rstrip("/")
 LLAMA = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080").rstrip("/")
-MCPO_CONTAINER = os.environ.get("MCPO_CONTAINER", "infra-mcpo-1")
+MCPO_CONTAINER = os.environ.get("MCPO_CONTAINER", "infra-mcpo")
 OWUI_MODEL = os.environ.get("OWUI_MODEL", "ragfarm")
 RAG_TOOL_ID = os.environ.get("RAG_TOOL_ID", "server:0")
 HOSTNAME_PROBE = os.environ.get("HOSTNAME_PROBE", "hsmbvxip001ts")

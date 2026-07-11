@@ -15,10 +15,10 @@
 x-proxy-env: &proxy_env
   HTTP_PROXY: ${HTTP_PROXY:-}
   HTTPS_PROXY: ${HTTPS_PROXY:-}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,qdrant}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,0.0.0.0,::1,host.docker.internal,qdrant}
   http_proxy: ${HTTP_PROXY:-}
   https_proxy: ${HTTPS_PROXY:-}
-  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal,qdrant}
+  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,0.0.0.0,::1,host.docker.internal,qdrant}
 
 services:
   qdrant:
