@@ -11,13 +11,13 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now ragfarm-stack.service
 #
-# The host services (llama-server, embedder) have their own units and must be
-# enabled separately; this stack tolerates them starting late (containers retry).
+# The host services (ragfarm-llama, ragfarm-embedder) have their own units and
+# must be enabled separately; this stack tolerates them starting late (containers retry).
 [Unit]
 Description=ragfarm container stack (qdrant, rag-retrieval, mcpo, open-webui)
 Requires=docker.service
-After=docker.service network-online.target llama-server.service embedder-server.service
-Wants=network-online.target llama-server.service embedder-server.service
+After=docker.service network-online.target ragfarm-llama.service ragfarm-embedder.service
+Wants=network-online.target ragfarm-llama.service ragfarm-embedder.service
 
 [Service]
 Type=oneshot
@@ -27,10 +27,10 @@ WorkingDirectory=/home/dave/ragfarm
 # Load repo-root .env proxy vars (no-op if unset), then bring up the operational
 # PoC services explicitly. placement + host-control run in MOCK mode by default
 # (ONE_MOCK/HOST_MOCK) so the agent + confirmation UX work with no OpenNebula.
-# (mcp-fs-agent + ingester are omitted — not part of the running agent path.)
+# (mcp-fs + ingester are omitted — not part of the running agent path.)
 # `docker compose` needs no sudo (dave is in the docker group).
-ExecStart=/bin/bash -lc 'source scripts/proxy-env.sh && /usr/bin/docker compose -f infra/compose.yaml up -d qdrant rag-retrieval mcp-infra-placement mcp-host-control mcpo open-webui'
-ExecStop=/usr/bin/docker compose -f /home/dave/ragfarm/infra/compose.yaml stop qdrant rag-retrieval mcp-infra-placement mcp-host-control mcpo open-webui
+ExecStart=/bin/bash -lc 'source scripts/proxy-env.sh && /usr/bin/docker compose -f infra/compose.yaml up -d qdrant rag-retrieval mcp-placement mcp-host-control mcpo open-webui'
+ExecStop=/usr/bin/docker compose -f /home/dave/ragfarm/infra/compose.yaml stop qdrant rag-retrieval mcp-placement mcp-host-control mcpo open-webui
 TimeoutStartSec=300
 
 [Install]

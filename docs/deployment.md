@@ -8,8 +8,8 @@ things that must change when the PoC AMD MiniPC is replaced by prod NVIDIA HW.
 
 | component | where | bind | notes |
 |-----------|-------|------|-------|
-| llama-server (Qwen2.5-7B Q4_K_M) | host | `127.0.0.1:8080` | Vulkan/iGPU; systemd `llama-server.service` |
-| embedder (BGE-M3, dense+sparse) | host | `127.0.0.1:8090` | CPU; systemd `embedder-server.service` |
+| llama-server (Qwen2.5-7B Q4_K_M) | host | `127.0.0.1:8080` | Vulkan/iGPU; systemd `ragfarm-llama.service` |
+| embedder (BGE-M3, dense+sparse) | host | `127.0.0.1:8090` | CPU; systemd `ragfarm-embedder.service` |
 | qdrant | container | `127.0.0.1:6333/6334` | `infra/compose.yaml`, volume `qdrant_data` |
 | rag-retrieval (`search_corpus`) | container, host-net | `127.0.0.1:8104` | MCP streamable-http |
 | mcpo (MCP→OpenAPI bridge) | container, host-net | `127.0.0.1:8000` | mounts `/rag`; config `services/mcp-gateway/mcpo-config.json` |
@@ -30,7 +30,7 @@ via `ssh -L 3000:127.0.0.1:3000 <host>`). **Restrict `:3000` at the host firewal
 to trusted networks** — it's the only externally reachable service.
 
 ## Autostart
-- Host services: `manifests/llama-server.service`, `manifests/embedder-server.service`
+- Host services: `manifests/ragfarm-llama.service`, `manifests/ragfarm-embedder.service`
   (both already `enabled`).
 - Container stack: `manifests/ragfarm-stack.service` runs `docker compose up -d` on
   boot (install steps in the unit header). Containers also carry
@@ -58,7 +58,7 @@ one non-obvious requirement is `assistant_message_id` **in the chat/completions
 request body**, encoded in the script).
 
 ## OpenNebula MCPs — mock mode & the confirmation gate (ADR-0004)
-Until live OpenNebula exists, `mcp-infra-placement` and `mcp-host-control` run in
+Until live OpenNebula exists, `mcp-placement` and `mcp-host-control` run in
 **mock mode** (`ONE_MOCK`/`HOST_MOCK` default to 1 in compose) against canned
 VM↔host data, so the agent path and the human-in-the-loop UX are testable with no
 cluster. Set `ONE_MOCK=0`/`HOST_MOCK=0` (and fill `.env`) at deployment.
@@ -89,9 +89,10 @@ Qdrant) is HW-agnostic and should NOT be re-architected. Concrete changes:
   a compose bridge network and reach inference/embedder via service DNS or
   `host.docker.internal` (which requires those services to bind beyond loopback).
   Re-evaluate the `0.0.0.0` exposure + firewalling for the target network.
-- **mcpo config**: when OpenNebula is reachable (steps 05/06 unblock), add
-  `mcp-infra-placement` (`where_is_vm`) and `mcp-host-control` to
-  `services/mcp-gateway/mcpo-config.json` so they appear in Open WebUI alongside
-  `search_corpus`; fill `ONE_XMLRPC`/`ONE_AUTH` per `services/mcp-infra-placement/.env.example`.
+- **mcpo config**: `mcp-placement` (`where_is_vm`) and `mcp-host-control` are
+  already mounted in `services/mcp-gateway/mcpo-config.json` and run in MOCK mode.
+  When OpenNebula is reachable (steps 05/06 unblock), set `ONE_MOCK=0`/`HOST_MOCK=0`
+  and fill `ONE_XMLRPC`/`ONE_AUTH` per `services/mcp-placement/.env.example` — no
+  mcpo-config or registration changes needed.
 - **Corpus**: `CORPUS_PATH` and the Qdrant `corpus` collection (dense 1024 + sparse)
   are portable; re-run `services/ingester/ingester.py --recreate` against prod corpus.

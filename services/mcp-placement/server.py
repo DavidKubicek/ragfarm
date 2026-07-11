@@ -1,5 +1,5 @@
 """
-mcp-infra-placement — MCP server answering "where is VM<n> running?" against
+mcp-placement — MCP server answering "where is VM<n> running?" against
 OpenNebula via its XML-RPC API (one.vm.info / one.vmpool.info).
 
 Transport: streamable HTTP (MCP), so it registers cleanly with the LLM/agent
@@ -28,7 +28,7 @@ ONE_AUTH = os.environ.get("ONE_AUTH", "oneadmin:CHANGEME")
 # with no cluster. Clearly a test mock; outputs carry "mock": true.
 ONE_MOCK = os.environ.get("ONE_MOCK", "").lower() in ("1", "true", "yes")
 
-mcp = FastMCP("infra-placement", host="0.0.0.0", port=8101)
+mcp = FastMCP("placement", host="0.0.0.0", port=8101)
 _proxy = xmlrpc.client.ServerProxy(ONE_XMLRPC, allow_none=True)
 
 # --- MOCK fixture (shared conceptually with mcp-host-control's mock) ------------

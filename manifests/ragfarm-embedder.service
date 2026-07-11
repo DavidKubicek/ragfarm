@@ -1,3 +1,4 @@
+# /etc/systemd/system/ragfarm-embedder.service  (runs on HOST, CPU)
 [Unit]
 Description=ragfarm embedder (BGE-M3, CPU)
 After=network.target
@@ -10,6 +11,10 @@ User=dave
 EnvironmentFile=-/home/dave/ragfarm/.env
 ExecStart=/opt/ryzenai/venv/bin/python /home/dave/ragfarm/services/embedder/server.py
 Environment=EMBED_MODEL_PATH=/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26
+# NOTE (ADR-0005 migration item 6): the XILINX_XRT/PYTHONPATH/LD_LIBRARY_PATH below
+# are vestigial NPU/XRT env — BGE-M3 runs on CPU, not the NPU (ADR-0002, step 03).
+# Left in place because the venv is shared and removing them is unverified to be
+# safe without a live restart test; harmless as-is, just not load-bearing for CPU.
 Environment=XILINX_XRT=/opt/xilinx/xrt
 Environment=PYTHONPATH=/opt/xilinx/xrt/python:/opt/ryzenai/venv/bin/python:/opt/xilinx/xrt/python
 Environment=PATH=/opt/xilinx/xrt/bin:/home/dave/.local/bin:/opt/ryzenai/venv/bin:/opt/xilinx/xrt/bin:/home/dave/.local/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin

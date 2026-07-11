@@ -1,5 +1,5 @@
 """
-mcp-fs-agent — sandboxed read-only filesystem access for the corpus.
+mcp-fs — sandboxed read-only filesystem access for the corpus.
 Lists filenames and reads text under FS_SANDBOX_ROOT only. No writes, no escape
 above the sandbox root (path is resolved and checked).
 STATUS: minimal working list/read; extend with globbing/metadata as needed.
@@ -7,7 +7,7 @@ STATUS: minimal working list/read; extend with globbing/metadata as needed.
 import os, pathlib
 from mcp.server.fastmcp import FastMCP
 ROOT = pathlib.Path(os.environ.get("FS_SANDBOX_ROOT", "/data/corpus")).resolve()
-mcp = FastMCP("fs-agent", host="0.0.0.0", port=8103)
+mcp = FastMCP("fs", host="0.0.0.0", port=8103)
 
 def _safe(rel: str) -> pathlib.Path:
     p = (ROOT / rel).resolve()

@@ -23,19 +23,21 @@ x-proxy-env: &proxy_env
 services:
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: infra-qdrant
     restart: unless-stopped
     ports: ["127.0.0.1:6333:6333", "127.0.0.1:6334:6334"]
     volumes: ["qdrant_data:/qdrant/storage"]
 
-  mcp-infra-placement:
-    build: ../services/mcp-infra-placement
+  mcp-placement:
+    build: ../services/mcp-placement
+    container_name: infra-mcp-placement
     restart: unless-stopped
     # BLOCKED for LIVE use in PoC (no OpenNebula creds yet); .env is filled at
     # deployment, so mark it optional or full-config compose commands fail.
     # ONE_MOCK defaults to 1 (canned data) so the integration can be tested with no
     # cluster; set ONE_MOCK=0 once real ONE_XMLRPC/ONE_AUTH are in .env.
     env_file:
-      - path: ../services/mcp-infra-placement/.env
+      - path: ../services/mcp-placement/.env
         required: false
     environment:
       <<: *proxy_env
@@ -45,6 +47,7 @@ services:
 
   mcp-host-control:
     build: ../services/mcp-host-control
+    container_name: infra-mcp-host-control
     restart: unless-stopped
     # HOST_MOCK defaults to 1 (simulated drain/reboot, nothing real); set HOST_MOCK=0
     # at deployment. HOST_ALLOWLIST gates confirm=True actions (mock nodes here).
@@ -58,8 +61,9 @@ services:
     ports: ["127.0.0.1:8102:8102"]
     extra_hosts: ["host.docker.internal:host-gateway"]
 
-  mcp-fs-agent:
-    build: ../services/mcp-fs-agent
+  mcp-fs:
+    build: ../services/mcp-fs
+    container_name: infra-mcp-fs
     restart: unless-stopped
     environment:
       <<: *proxy_env
@@ -69,6 +73,7 @@ services:
 
   ingester:
     build: ../services/ingester
+    container_name: infra-ingester
     restart: unless-stopped
     environment:
       <<: *proxy_env
@@ -87,6 +92,7 @@ services:
   # bind. It listens on 127.0.0.1:8104 (RAG_HOST) so it too stays loopback-only.
   rag-retrieval:
     build: ../services/rag-retrieval
+    container_name: infra-rag-retrieval
     restart: unless-stopped
     network_mode: host
     environment:
@@ -101,10 +107,12 @@ services:
   # mcpo — bridges the MCP server(s) to OpenAPI so Open WebUI can call the tools
   # (ADR-0003). Host networking to reach rag-retrieval at 127.0.0.1:8104; serves
   # OpenAPI on 127.0.0.1:8000, each MCP mounted under /<name> (rag -> /rag).
-  # 05/06 (placement/host-control) are BLOCKED in the PoC; add them to
-  # mcpo-config.json when they unblock at deployment.
+  # placement + host-control are already mounted here and run in MOCK mode
+  # (ONE_MOCK/HOST_MOCK); switch those to 0 once OpenNebula creds exist at
+  # deployment — no "add them later" step remains.
   mcpo:
     image: ghcr.io/open-webui/mcpo:main
+    container_name: infra-mcpo
     restart: unless-stopped
     network_mode: host
     environment:
@@ -125,6 +133,7 @@ services:
   # loopback-only. Restrict :3000 at the host firewall to trusted networks.
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
+    container_name: infra-open-webui
     restart: unless-stopped
     network_mode: host
     environment:

@@ -19,7 +19,7 @@ mcp = FastMCP("host-control", host="0.0.0.0", port=8102)
 ALLOWLIST = set(filter(None, os.environ.get("HOST_ALLOWLIST", "").split(",")))
 HOST_MOCK = os.environ.get("HOST_MOCK", "").lower() in ("1", "true", "yes")
 
-# canned VMs per host (consistent with mcp-infra-placement's mock fixture)
+# canned VMs per host (consistent with mcp-placement's mock fixture)
 _MOCK_HOST_VMS = {
     "node-01": [{"vm_id": 101, "name": "web-prod-1"}, {"vm_id": 103, "name": "db-prod-1"}],
     "node-02": [{"vm_id": 102, "name": "web-prod-2"}, {"vm_id": 105, "name": "cache-1"}],

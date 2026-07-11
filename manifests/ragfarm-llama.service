@@ -1,4 +1,6 @@
-# /etc/systemd/system/llama-server.service  (runs on HOST, needs iGPU)
+# /etc/systemd/system/ragfarm-llama.service  (runs on HOST, needs iGPU)
+# ExecStart invokes llama.cpp's own binary, which is genuinely named `llama-server`
+# (ADR-0005 short name: "llama") — that binary name is upstream's, not ours to rename.
 [Unit]
 Description=llama.cpp server (Qwen2.5-7B-Instruct, Vulkan/iGPU)
 After=network-online.target

@@ -66,7 +66,7 @@ source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); build clo
 # Build per infra/llama/README.md (Vulkan backend), then place the GGUF:
 #   models/gguf/Qwen2.5-7B-Instruct-Q4_K_M.gguf
 # Launch llama-server (Vulkan, OpenAI-compatible, tool-calling on):
-#   via manifests/llama-server.service, or directly:
+#   via manifests/ragfarm-llama.service, or directly:
 llama-server \
   -m models/gguf/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
   --host 127.0.0.1 --port 8080 \
@@ -126,7 +126,7 @@ from huggingface_hub import snapshot_download
 print("snapshot:", snapshot_download("BAAI/bge-m3", revision="50f9396f75618b3389c1fd1068a1ff58dc7b5b26", ignore_patterns=["pytorch_model.bin"]))
 PY
 
-# Launch embedder-server via manifests/embedder-server.service as a new system unit.
+# Launch the embedder via manifests/ragfarm-embedder.service as a new system unit.
 # Probe dense+sparse with one numeric/English table row and one Czech sentence:
 curl -s 127.0.0.1:8090/embed \
   -H 'Content-Type: application/json' \
@@ -208,7 +208,7 @@ semantic query returns a relevant doc chunk (proves multilingual dense). If
 ---
 
 ### 05 — mcp-placement  (reference implementation) — BLOCKED in PoC
-`services/mcp-infra-placement` is already written and its XML parsing is
+`services/mcp-placement` is already written and its XML parsing is
 unit-tested. It is the pattern the other MCPs are modelled on. Verifying it against
 a live cluster requires OpenNebula, which the PoC does not have.
 
@@ -225,7 +225,7 @@ reachability to the OpenNebula frontend. Absent → `BLOCKED`.
 ```bash
 cd ~dave/ragfarm
 cp -n .env.example .env   # then fill ONE_XMLRPC + ONE_AUTH
-python services/mcp-infra-placement/server.py &
+python services/mcp-placement/server.py &
 # call where_is_vm against a known VM; expect the live host it runs on
 ```
 
@@ -235,13 +235,13 @@ host, sourced from OpenNebula (`one.vm.info` / `one.vmpool.info`), not a mock.
 ---
 
 ### 06 — mcp-fs-host-control — partially deferred (BLOCKED in PoC)
-fs-agent and host-control. **host-control stays SAFETY-GATED:** dry-run default,
+fs and host-control. **host-control stays SAFETY-GATED:** dry-run default,
 allowlist, explicit confirm flag. Implement drain-then-reboot via OpenNebula before
 enabling any real action. Model both on the step-05 reference implementation.
 
 **host-control real actions are BLOCKED until live OpenNebula exists** (see
 ADR-0003) — its drain-then-reboot path cannot be verified without a cluster, and
-must never be enabled against an unverified ON connection. fs-agent (sandboxed
+must never be enabled against an unverified ON connection. fs (sandboxed
 read) has no ON dependency and MAY be implemented and tested now if you choose; if
 you do, keep it scoped to read-only sandboxed paths.
 
@@ -253,7 +253,7 @@ python services/mcp-host-control/server.py &
 # with confirm against an allowlisted host, perform drain-then-reboot via ON.
 ```
 
-**Gate (deployment only):** fs-agent returns sandboxed read results for an allowed
+**Gate (deployment only):** fs returns sandboxed read results for an allowed
 path AND refuses a path outside the sandbox; host-control, given a reboot request
 without the confirm flag, returns a dry-run plan and performs **no** real action;
 with the confirm flag against an allowlisted host, performs drain-then-reboot via

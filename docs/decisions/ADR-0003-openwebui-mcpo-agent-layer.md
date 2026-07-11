@@ -51,7 +51,7 @@ RAG fails the exact-match infra lookups this system exists to serve.
 **Durable layer — survives the hardware swap, HW-agnostic:**
 - Open WebUI as the UI / agent loop.
 - mcpo bridging MCP servers → OpenAPI tools Open WebUI can call.
-- MCP servers: `rag-retrieval` (`search_corpus`), `mcp-infra-placement`
+- MCP servers: `rag-retrieval` (`search_corpus`), `mcp-placement`
   (`where_is_vm`), `mcp-host-control` (drain-then-reboot, safety-gated).
 - `search_corpus`: hybrid dense+sparse over Qdrant + BGE-M3.
 - The inference endpoint is consumed ONLY through its OpenAI-compatible API.
