@@ -1,0 +1,11 @@
+# ragfarm ingester + watcher runtime deps (ADR-0006). Install into the project
+# venv (~dave/ragfarm/.venv) on host python3.12, pinned to known-good versions via
+# a constraints file derived from the retiring RyzenAI venv:
+#   pip install -r requirements.txt -c known-good.constraints.txt
+requests
+qdrant-client
+python-docx
+pdfplumber
+langdetect
+openpyxl
+watchdog
