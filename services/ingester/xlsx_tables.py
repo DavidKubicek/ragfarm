@@ -79,6 +79,13 @@ def clean_cell(v) -> str:
     return str(v).replace("\xa0", " ").strip()
 
 
+def _clean_header_label(v) -> str:
+    """Header cell text, trimmed and stripped of stray trailing colons only
+    (e.g. 'E-mail:' -> 'E-mail'). Other punctuation ('[', ']', '(', ')', etc.)
+    is preserved verbatim; extend here if more needs trimming."""
+    return str(v).strip().rstrip(":").strip()
+
+
 def _is_numeric(v) -> bool:
     if v is None:
         return False
@@ -287,6 +294,19 @@ def _is_new_table_header(wsv, wss, ri, c1, c2) -> bool:
     return (nbold >= ntext * 0.5) or (nfill >= ntext * 0.5)
 
 
+def _is_band_boundary(wsv, wss, ri, c1, c2) -> bool:
+    """Boundary trigger for a super-header BAND row that reopens a new labeled
+    sub-table (e.g. 'Projektový tým' after 'Řízení projektu' in a contact
+    list): a blank separator row directly above it, and a horizontal merge
+    band starting within [c1, c2] on this row. Catches band rows too sparse
+    (mostly blank around the one merged label) to pass `_is_new_table_header`'s
+    text>blank test."""
+    if ri <= 1 or not _is_all_blank(wsv, ri - 1, c1, c2):
+        return False
+    bands = _hbands(wss, ri)
+    return any(c1 <= ci <= c2 for ci in bands)
+
+
 def _merged_bands_single(wss, header_ri) -> dict:
     """Single horizontal merge one row above the header (duplicate-column
     disambiguation for the single-row model)."""
@@ -300,7 +320,7 @@ def _build_header_single(wsv, wss, header_ri, c1, c2) -> dict:
         v = wsv.cell(row=header_ri, column=ci).value
         if v is None or str(v).strip() == "":
             continue
-        k = str(v).strip()
+        k = _clean_header_label(v)
         if ci in bands and bands[ci] != k:
             k = f"{bands[ci]} {k}"
         if k in seen:
@@ -343,6 +363,32 @@ def _ff_candidate_cols(wsv, wss, keys, header_ri, end) -> set:
     return set()
 
 
+def _reuse_trailing_cols(wsv, keys, c2, header_ri, end, band_label, prev_single) -> tuple:
+    """Extend a single-row header with TRAILING columns (right of this header's
+    own span) that a PRIOR single-header table earlier in the same sheet
+    already labeled, and that still carry data in this sub-table's body, but
+    have no label of their own in this header row. Covers a repeated
+    super-header band whose trailing columns aren't re-typed under the new
+    band (e.g. 'Tel:'/'E-mail:' shown once under 'Řízení projektu', not
+    repeated under a later 'Projektový tým'). Reused labels are prefixed with
+    THIS header's own band, matching directly-labeled columns. Returns the
+    (possibly extended) keys dict and c2."""
+    if not band_label or not prev_single or not prev_single.get("keys"):
+        return keys, c2
+    extra = {}
+    for ci, label in prev_single["keys"].items():
+        if ci <= c2 or ci in keys:
+            continue
+        has_data = any(
+            (v := wsv.cell(row=rr, column=ci).value) is not None and str(v).strip() != ""
+            for rr in range(header_ri + 1, end + 1))
+        if has_data:
+            extra[ci] = label if label.startswith(band_label) else f"{band_label} {label}"
+    if not extra:
+        return keys, c2
+    return {**keys, **extra}, max(c2, max(extra))
+
+
 def _looks_headerless(wsv, wss, header_ri, c1, c2, end) -> bool:
     """The scored 'header' is bogus if it is shape-identical to the row below AND
     has no formatting edge (Plain: every row identical)."""
@@ -383,7 +429,7 @@ def _compose_header_multi(wsv, wss, top, bottom, cmax) -> dict:
         for r in range(bottom, top - 1, -1):
             v = wsv.cell(row=r, column=c).value
             if v is not None and str(v).strip() != "":
-                label = str(v).strip()
+                label = _clean_header_label(v)
                 break
         if label is None:
             continue
@@ -435,17 +481,26 @@ def _classify_header_model(wss, region_top, cmax) -> str:
     return "single"
 
 
-def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnum) -> Iterator[dict]:
+def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnum, report=None,
+                  prev_single=None) -> Iterator[dict]:
     """One single-row-header table starting at/after region_top. Yields records and,
-    as the LAST yielded item, a control dict {'_next_ri': N} for the caller."""
+    as the LAST yielded item, a control dict {'_next_ri': N} for the caller.
+
+    If `report` is a list, and a heading is actually captured (non-Plain), a meta
+    dict is appended to it: sheet/table/model/header position/col span/keys, with
+    'rows' filled in once the data rows have been counted.
+
+    `prev_single`, if a dict, carries {'keys'} from the previous single-header
+    table in the same sheet, for `_reuse_trailing_cols` and is updated with
+    this table's keys once captured (see `_reuse_trailing_cols`)."""
     header_ri = _detect_header_row(wsv, wss, region_top, cmax)
     c1, c2 = _header_span(wsv, header_ri, cmax)
 
-    # provisional end = next new-header-shaped row (stacked table) within region
+    # provisional end = next new-header-shaped or new-band row (stacked table) within region
     end = region_end
     scan = header_ri + 1
     while scan <= region_end:
-        if _is_new_table_header(wsv, wss, scan, c1, c2):
+        if _is_new_table_header(wsv, wss, scan, c1, c2) or _is_band_boundary(wsv, wss, scan, c1, c2):
             end = scan - 1
             break
         scan += 1
@@ -475,6 +530,8 @@ def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnu
     if not keys:
         yield {"_next_ri": region_end + 1}
         return
+    band_label = next(iter(_merged_bands_single(wss, header_ri).values()), None)
+    keys, c2 = _reuse_trailing_cols(wsv, keys, c2, header_ri, end, band_label, prev_single)
     anchors = _anchor_cols(keys)
     data_end = _last_data_row(wsv, anchors, header_ri, end)
     ff_cols = _ff_candidate_cols(wsv, wss, keys, header_ri, data_end)
@@ -482,6 +539,13 @@ def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnu
     log.info("%s[%s] t#%d SINGLE hdr R%d span=%d..%d cols=%d anchors=%s ff=%d vm=%s rows=%d trim=%d",
              source_file, sheet, tnum, header_ri, c1, c2, len(keys), anchors,
              len(ff_cols), sorted(vm.keys()), data_end - header_ri, end - data_end)
+
+    meta = None
+    if report is not None:
+        meta = {"sheet": sheet, "table": tnum, "model": "single",
+                "header_row": header_ri, "col_span": (c1, c2),
+                "keys": list(keys.values()), "rows": 0}
+        report.append(meta)
 
     carry, ridx = {}, 0
     for rr in range(header_ri + 1, data_end + 1):
@@ -508,12 +572,19 @@ def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnu
         text = _serialize_kv(keys, values, sheet)
         if text:
             yield _rec(source_file, sheet, tnum, ridx, text, header_row=header_ri)
+    if meta is not None:
+        meta["rows"] = ridx
+    if prev_single is not None:
+        prev_single["keys"] = keys
     yield {"_next_ri": end + 1}
 
 
-def _emit_multi(wsv, wss, sheet, cmax, source_file, region_top, tnum, prev) -> Iterator[dict]:
+def _emit_multi(wsv, wss, sheet, cmax, source_file, region_top, tnum, prev, report=None) -> Iterator[dict]:
     """One multi-row-header table (or a title-band section reusing prev header).
-    `prev` carries {'keys','c1','c2'} from the previous multi table for reuse."""
+    `prev` carries {'keys','c1','c2'} from the previous multi table for reuse.
+
+    If `report` is a list, a meta dict (position, keys, row count) is appended —
+    see `_emit_single` for the shape."""
     rmax = wsv.max_row or 1
     ri = region_top
     title = None
@@ -563,6 +634,13 @@ def _emit_multi(wsv, wss, sheet, cmax, source_file, region_top, tnum, prev) -> I
              source_file, sheet, tnum, title, top, bottom, c1, c2, len(keys),
              reused, synth, anchors, sorted(vm.keys()), data_end - bottom, end - data_end)
 
+    meta = None
+    if report is not None:
+        meta = {"sheet": sheet, "table": tnum, "model": "multi",
+                "header_row": (top, bottom), "col_span": (c1, c2),
+                "keys": list(keys.values()), "reused": reused, "rows": 0}
+        report.append(meta)
+
     ridx = 0
     for rr in range(bottom + 1, data_end + 1):
         if _is_all_blank(wsv, rr, c1, c2):
@@ -579,6 +657,9 @@ def _emit_multi(wsv, wss, sheet, cmax, source_file, region_top, tnum, prev) -> I
         text = _serialize_kv(keys, values, sheet)
         if text:
             yield _rec(source_file, sheet, tnum, ridx, text, header_row=bottom)
+
+    if meta is not None:
+        meta["rows"] = ridx
 
     # expose header for reuse by a following title-band section
     if not reused:
@@ -602,12 +683,13 @@ def _rec(source_file, sheet, tnum, ridx, text, header_row) -> dict:
 # ============================================================================
 # sheet + workbook drivers
 # ============================================================================
-def _iter_sheet_tables(wsv, wss, sheet, cmax, source_file) -> Iterator[dict]:
+def _iter_sheet_tables(wsv, wss, sheet, cmax, source_file, report=None) -> Iterator[dict]:
     rmax = wsv.max_row or 1
     ri = wsv.min_row or 1
     tnum = 0
     guard = 0
-    prev = {}  # carries previous MULTI header for title-band reuse
+    prev = {}         # carries previous MULTI header for title-band reuse
+    prev_single = {}  # carries previous SINGLE header for trailing-column reuse
     while ri <= rmax and guard < MAX_TABLES_PER_SHEET:
         guard += 1
         while ri <= rmax and _is_all_blank(wsv, ri, 1, cmax):
@@ -616,9 +698,10 @@ def _iter_sheet_tables(wsv, wss, sheet, cmax, source_file) -> Iterator[dict]:
             break
         model = _classify_header_model(wss, ri, cmax)
         if model == "multi":
-            gen = _emit_multi(wsv, wss, sheet, cmax, source_file, ri, tnum, prev)
+            gen = _emit_multi(wsv, wss, sheet, cmax, source_file, ri, tnum, prev, report=report)
         else:
-            gen = _emit_single(wsv, wss, sheet, cmax, source_file, ri, rmax, tnum)
+            gen = _emit_single(wsv, wss, sheet, cmax, source_file, ri, rmax, tnum, report=report,
+                                prev_single=prev_single)
         next_ri = ri + 1
         for item in gen:
             if "_next_ri" in item:
@@ -629,8 +712,13 @@ def _iter_sheet_tables(wsv, wss, sheet, cmax, source_file) -> Iterator[dict]:
         ri = max(next_ri, ri + 1)
 
 
-def iter_xlsx(path) -> Iterator[dict]:
-    """Public entry point used by ingester.py. `path` is a pathlib.Path."""
+def iter_xlsx(path, report=None) -> Iterator[dict]:
+    """Public entry point used by ingester.py. `path` is a pathlib.Path.
+
+    If `report` is a list, it is populated in place with one meta dict per
+    successfully-captured table heading (see `_emit_single`/`_emit_multi`),
+    across every sheet in the workbook. Default (None) is a no-op, so existing
+    callers (ingester.py) are unaffected."""
     wbv = openpyxl.load_workbook(path, data_only=True)
     wbs = load_workbook(path)
     for sheet in wbv.sheetnames:
@@ -639,4 +727,4 @@ def iter_xlsx(path) -> Iterator[dict]:
         cmax = wsv.max_column or 1
         if (wsv.max_row or 0) < 1 or cmax < 1:
             continue
-        yield from _iter_sheet_tables(wsv, wss, sheet, cmax, path.name)
+        yield from _iter_sheet_tables(wsv, wss, sheet, cmax, path.name, report=report)

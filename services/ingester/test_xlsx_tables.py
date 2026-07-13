@@ -8,6 +8,13 @@ round-trip. No Qdrant or embedder needed — exercises the parse path only.
 Place fixtures under tests/fixtures/ (or point FIXTURES at them) and run:
     python services/ingester/test_xlsx_tables.py
 Exit code 0 = all pass, 1 = any failure.
+
+Pass an XLSX path as argv[1] instead to skip the fixture regression and run a
+report over that file: every sheet is scanned end-to-end for multiple tables
+(same iter_xlsx driver as production), and for each table whose heading was
+successfully captured, its position, header keys, and detected row count are
+printed:
+    python services/ingester/test_xlsx_tables.py /path/to/workbook.xlsx
 """
 import os
 import re
@@ -113,5 +120,29 @@ def run():
     return 0
 
 
+def report_file(path: pathlib.Path) -> int:
+    """Run the parser over one workbook and print, per successfully-captured
+    table heading: sheet, table#, model, header position, keys, row count."""
+    if not path.exists():
+        print(f"file not found: {path}")
+        return 1
+
+    report = []
+    records = list(xt.iter_xlsx(path, report=report))
+    print(f"{path} -- {len(records)} record(s) across {len(report)} captured table heading(s)\n")
+
+    for m in report:
+        hr = m["header_row"]
+        pos = f"row {hr}" if isinstance(hr, int) else f"rows {hr[0]}-{hr[1]}"
+        c1, c2 = m["col_span"]
+        print(f"[{m['sheet']}] table#{m['table']} ({m['model']}) header @ {pos}, cols {c1}-{c2}")
+        print(f"    keys ({len(m['keys'])}): {m['keys']}")
+        print(f"    rows detected: {m['rows']}")
+
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        sys.exit(report_file(pathlib.Path(sys.argv[1])))
     sys.exit(run())
