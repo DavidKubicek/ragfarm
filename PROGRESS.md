@@ -75,3 +75,44 @@ NOTE: ADR-0006 activated — 2026-07-14 UTC
       corpus_20260714-025915_901856e8 via --recreate (zero blackout after migration).
     - infra/compose.yaml ingester: block removed (superseded by host watcher).
   gate:    All §9 gates passed; see logs/ingester-adr0006.log.
+
+NOTE: OWUI serving tuning (context handling + tool-calling) — 2026-07-14 UTC
+  owner:   Dave Kubicek (owner-directed debugging, not a build-step)
+  problem: Multi-turn RAG chats in Open WebUI hit a slow CPU-busy "before-tool"
+           delay, context overflow (hard 400 errors), stalls, and degraded
+           tool-calling (model narrated instead of calling reboot_host). Root
+           cause: unbounded accumulation of REPLAYED tool-result blobs in OWUI
+           conversation history — each turn resends the full prior tool outputs
+           (a single docx "How-Tos" chunk is ~4k tokens), so prompts reached
+           10-14k+ tokens. A warm llama prompt-cache had hidden the cost for days;
+           a llama restart exposed it (cold full re-prefill of the whole history).
+           NOT caused by the .venv/embedder move or the watcher.
+  changes:
+    - manifests/ragfarm-llama.service: -c 16384 -> -c 32768; added
+      --context-shift --keep 3072. NOTE: --context-shift only rescues GENERATION
+      overflow, NOT an oversized prompt (verified: 28k-token prompt still returns
+      400 exceed_context_size_error). So 32k only raises the ceiling; it does not
+      make overflow impossible. --keep 3072 preserves system prompt + tool schemas
+      across shifts. (-parallel 1 was tried then reverted to default 4 slots;
+      prompt-cache restore makes single-slot safe but 4 slots matched the proven
+      baseline.)
+    - OWUI model "ragfarm": function_calling native -> default. THIS was the
+      effective fix — restored immediate/correct tool calls, faster generation,
+      and cut per-turn accumulation. Stored in the openwebui_data docker volume
+      (webui.db), NOT version-controlled; revert with a one-field DB update.
+  tradeoff / PROD caveat:
+    - In "default" mode the model answers a REPEATED question from context
+      instead of re-calling the tool (observed: 2nd "Kde bezi sftp-gw?" and 2nd
+      "Jak se prihlasim?" made zero tool calls). Harmless in test, but STALE
+      ANSWERS are unacceptable for production.
+    - PROD PLAN: return to function_calling = "native" for the real deployment,
+      paired with a larger/newer model + bigger context window (which is what
+      lets native mode carry the accumulated trace without overflowing).
+    - A reboot sentence that prefaced one login answer was verified as a pure
+      context echo (that turn called zero tools) — no host-control execution.
+  deferred lever #2 (accumulation suppression via retrieval; NOT applied):
+    - In services/rag-retrieval/server.py, cap each result's "text" (~800 chars)
+      and lower default k (5 -> 4) so each tool result is ~1k instead of ~4k
+      tokens, slowing history growth. Parked because it degrades answer grounding
+      to patch a plumbing issue; the clean fix is finer docx chunking in the
+      (frozen) ingester parser. Keep #2 as a fallback if context buildup returns.
