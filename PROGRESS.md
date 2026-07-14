@@ -60,3 +60,18 @@ BLOCKED: 06-mcp-fs-host-control — 2026-06-18T11:30Z
           without a live cluster. Keep host-control dry-run/confirm-gated; do not
           enable real actions until ON is reachable at deployment.
 
+
+NOTE: ADR-0006 activated — 2026-07-14 UTC
+  owner:   Dave Kubicek (owner-directed capability change, not a build-step)
+  summary: Content-addressed corpus sync with SQLite manifest + alias switch +
+           autonomous watcher deployed and validated end-to-end.
+  changes:
+    - Step-04 "ingester frozen" rule superseded by ADR-0006 for owner-driven work;
+      xlsx_tables.py parser remains off-limits to build agents.
+    - Project venv moved: .venv on python3.12 replaces /opt/ryzenai/venv for both
+      ingester and embedder. NPU env stripped from ragfarm-embedder.service.
+    - ragfarm-ingester-watcher.service installed, enabled, wired into ragfarm-stack.
+    - Legacy physical corpus collection migrated to alias corpus ->
+      corpus_20260714-025915_901856e8 via --recreate (zero blackout after migration).
+    - infra/compose.yaml ingester: block removed (superseded by host watcher).
+  gate:    All §9 gates passed; see logs/ingester-adr0006.log.

@@ -16,8 +16,8 @@
 [Unit]
 Description=ragfarm container stack (qdrant, rag-retrieval, mcpo, open-webui)
 Requires=docker.service
-After=docker.service network-online.target ragfarm-llama.service ragfarm-embedder.service
-Wants=network-online.target ragfarm-llama.service ragfarm-embedder.service
+After=docker.service network-online.target ragfarm-llama.service ragfarm-embedder.service ragfarm-ingester-watcher.service
+Wants=network-online.target ragfarm-llama.service ragfarm-embedder.service ragfarm-ingester-watcher.service
 
 [Service]
 Type=oneshot

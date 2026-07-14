@@ -1,0 +1,25 @@
+[Unit]
+Description=ragfarm corpus ingester watcher (autonomous incremental sync, ADR-0006)
+After=network-online.target ragfarm-embedder.service
+Wants=network-online.target ragfarm-embedder.service
+
+[Service]
+Type=simple
+User=dave
+EnvironmentFile=-/home/dave/ragfarm/.env
+Environment=CORPUS_PATH=/data/corpus
+Environment=QDRANT_URL=http://127.0.0.1:6333
+Environment=EMBED_ENDPOINT=http://127.0.0.1:8090/embed
+Environment=QDRANT_COLLECTION=corpus
+Environment=INGEST_DELETE_GRACE=120
+Environment=INGEST_SCAN_INTERVAL=3600
+Environment=INGEST_DEBOUNCE=3
+WorkingDirectory=/home/dave/ragfarm
+ExecStart=/home/dave/ragfarm/.venv/bin/python /home/dave/ragfarm/services/ingester/ingester.py --watch
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/dave/ragfarm/logs/ingester-watcher.log
+StandardError=append:/home/dave/ragfarm/logs/ingester-watcher.log
+
+[Install]
+WantedBy=multi-user.target

@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 logs/
 .env
+.venv/
+services/ingester/manifest.db*
+services/ingester/known-good.constraints.txt

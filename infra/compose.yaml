@@ -71,19 +71,6 @@ services:
     volumes: ["/data/corpus:/data/corpus:ro"]
     ports: ["127.0.0.1:8103:8103"]
 
-  ingester:
-    build: ../services/ingester
-    container_name: infra-ingester
-    restart: unless-stopped
-    environment:
-      <<: *proxy_env
-      QDRANT_URL: http://qdrant:6333
-      EMBED_ENDPOINT: http://host.docker.internal:8090/embed  # NPU embedder on host
-      CORPUS_PATH: /data/corpus
-    volumes: ["/data/corpus:/data/corpus:ro"]
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    depends_on: [qdrant]
-
   # rag-retrieval — search_corpus (hybrid dense+sparse RRF over Qdrant + host
   # embedder). ADR-0003 Option B: the corpus RAG tool lives here, not in the UI.
   # HOST NETWORKING: the generative LLM (:8080) and BGE-M3 embedder (:8090) run on

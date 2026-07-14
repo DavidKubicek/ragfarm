@@ -9,16 +9,8 @@ User=dave
 # Optional repo-root .env (proxy vars etc.); leading `-` => no failure if absent.
 # Placed before the explicit Environment= lines so those still take precedence.
 EnvironmentFile=-/home/dave/ragfarm/.env
-ExecStart=/opt/ryzenai/venv/bin/python /home/dave/ragfarm/services/embedder/server.py
+ExecStart=/home/dave/ragfarm/.venv/bin/python /home/dave/ragfarm/services/embedder/server.py
 Environment=EMBED_MODEL_PATH=/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26
-# NOTE (ADR-0005 migration item 6): the XILINX_XRT/PYTHONPATH/LD_LIBRARY_PATH below
-# are vestigial NPU/XRT env — BGE-M3 runs on CPU, not the NPU (ADR-0002, step 03).
-# Left in place because the venv is shared and removing them is unverified to be
-# safe without a live restart test; harmless as-is, just not load-bearing for CPU.
-Environment=XILINX_XRT=/opt/xilinx/xrt
-Environment=PYTHONPATH=/opt/xilinx/xrt/python:/opt/ryzenai/venv/bin/python:/opt/xilinx/xrt/python
-Environment=PATH=/opt/xilinx/xrt/bin:/home/dave/.local/bin:/opt/ryzenai/venv/bin:/opt/xilinx/xrt/bin:/home/dave/.local/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
-Environment=LD_LIBRARY_PATH=/opt/xilinx/xrt/lib:/opt/ryzenai/venv/lib/python3.12/site-packages/flexml/flexml_extras/lib:/opt/ryzenai/venv/lib/python3.12/site-packages/onnxruntime/capi:/opt/ryzenai/venv/lib/python3.12/site-packages/voe/lib:/opt/xilinx/xrt/lib:/opt/rocm/lib:/opt/rocm/lib64:
 WorkingDirectory=/home/dave/ragfarm
 Restart=on-failure
 StandardOutput=append:/home/dave/ragfarm/logs/03-embedder-service.log
