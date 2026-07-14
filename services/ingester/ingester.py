@@ -541,9 +541,19 @@ def watch(root: pathlib.Path, man: Manifest):
 
     state = {"dirty": True, "last_event": 0.0, "last_scan": 0.0}  # dirty -> initial pass
 
+    # React only to content-mutating events. Every pass OPENS+READS each corpus
+    # file to checksum it, which the observer sees as IN_OPEN / IN_CLOSE_NOWRITE
+    # ('opened' / 'closed_no_write'). Reacting to those read-only events would let
+    # the watcher's own hashing re-arm the debounce and spin a pass every DEBOUNCE
+    # seconds forever (a self-feeding loop). Keep writes/creates/deletes/renames
+    # and close-after-write; ignore bare reads.
+    _READONLY_EVENTS = ("opened", "closed_no_write")
+
     class _H(FileSystemEventHandler):
         def on_any_event(self, event):
             if getattr(event, "is_directory", False):
+                return
+            if event.event_type in _READONLY_EVENTS:
                 return
             state["dirty"] = True
             state["last_event"] = time.time()
