@@ -30,6 +30,10 @@ WorkingDirectory=/home/dave/ragfarm
 # (mcp-fs + ingester are omitted — not part of the running agent path.)
 # `docker compose` needs no sudo (dave is in the docker group).
 ExecStart=/bin/bash -lc 'source scripts/proxy-env.sh && /usr/bin/docker compose -f infra/compose.yaml up -d qdrant rag-retrieval mcp-placement mcp-host-control mcpo open-webui'
+# mcpo races its MCP backends on boot and comes up degraded (100% CPU spin,
+# host-control unmounted). Wait for backends to listen, then restart mcpo once so
+# it mounts all tools cleanly. Best-effort; see scripts/mcpo-heal.sh.
+ExecStartPost=/home/dave/ragfarm/scripts/mcpo-heal.sh
 ExecStop=/usr/bin/docker compose -f /home/dave/ragfarm/infra/compose.yaml stop qdrant rag-retrieval mcp-placement mcp-host-control mcpo open-webui
 TimeoutStartSec=300
 
