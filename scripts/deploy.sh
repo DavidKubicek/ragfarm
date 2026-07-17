@@ -166,7 +166,6 @@ phase_host_services() {
 	# GATE
 	wait_http "$LLM_URL/v1/models" 120 || die "llama endpoint not answering ($LLM_URL)"
 	# embedder must return NON-EMPTY sparse (same failure class as the TEI drop bug)
-	set -x
 	curl -s "$EMBED_URL/embed" -H 'content-type: application/json' \
 		-d '{"input":["prod-kvm-03 10.20.1.43 vlan203"],"kind":"passage"}' \
 	| "$VENV/bin/python" - <<'PY' || die "embedder sparse gate failed"
