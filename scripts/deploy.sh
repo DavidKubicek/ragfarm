@@ -165,15 +165,20 @@ phase_host_services() {
 
 	# GATE
 	wait_http "$LLM_URL/v1/models" 120 || die "llama endpoint not answering ($LLM_URL)"
-	# embedder must return NON-EMPTY sparse (same failure class as the TEI drop bug)
+	# embedder must return NON-EMPTY sparse (same failure class as the TEI drop bug).
+	# Checker script comes via process substitution, NOT `python - <<EOF`: a heredoc
+	# on `python -` claims stdin as the PROGRAM source, so the piped curl JSON never
+	# reaches json.load(sys.stdin) (it reads an exhausted stream -> empty). Process
+	# substitution passes the script as a file, leaving stdin for the curl output.
 	curl -s "$EMBED_URL/embed" -H 'content-type: application/json' \
 		-d '{"input":["prod-kvm-03 10.20.1.43 vlan203"],"kind":"passage"}' \
-	| "$VENV/bin/python" - <<'PY' || die "embedder sparse gate failed"
+	| "$VENV/bin/python" <(cat <<'PY'
 import sys, json
 d = json.load(sys.stdin); s = d["sparse"][0]
 assert len(d["dense"][0]) == 1024 and len(s) > 0, "dense!=1024 or sparse empty"
 print(f"  dense_dim {len(d['dense'][0])}  sparse_terms {len(s)}")
 PY
+	) || die "embedder sparse gate failed"
 	ok "llama + embedder active; embedder returns dense(1024)+sparse"
 }
 
@@ -209,9 +214,11 @@ phase_corpus() {
 	fi
 
 	# GATE — point count > 0 AND stored sparse is populated (config alone can't tell you)
+	# Process substitution (not `python - <<EOF`) so the scroll JSON stays on stdin
+	# for json.load; see the embedder gate in phase_host_services for the full why.
 	curl -s "$QDRANT_URL/collections/$ALIAS/points/scroll" -H 'content-type: application/json' \
 		-d '{"limit":1,"with_vector":true,"with_payload":false}' \
-	| "$VENV/bin/python" - <<'PY' || die "stored-sparse gate failed — hybrid retrieval would be broken"
+	| "$VENV/bin/python" <(cat <<'PY'
 import sys, json
 pts = json.load(sys.stdin)["result"]["points"]
 assert pts, "collection empty"
@@ -219,6 +226,7 @@ sp = pts[0]["vector"]["sparse"]
 assert len(sp["indices"]) > 0, "stored sparse vector is EMPTY"
 print(f"  stored sparse_indices {len(sp['indices'])}")
 PY
+	) || die "stored-sparse gate failed — hybrid retrieval would be broken"
 	ok "corpus present; alias '$ALIAS' resolves; stored sparse populated"
 }
 
