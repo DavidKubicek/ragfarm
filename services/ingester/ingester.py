@@ -58,9 +58,13 @@ SCAN_INTERVAL = float(os.environ.get("INGEST_SCAN_INTERVAL", "3600"))  # watch: 
 DEBOUNCE      = float(os.environ.get("INGEST_DEBOUNCE", "3"))          # watch: quiescence before a pass
 WATCH_POLL    = os.environ.get("INGEST_WATCH_POLL", "").lower() in ("1", "true", "yes")
 
-CHUNK_MIN_TOK = 256
-CHUNK_MAX_TOK = 384
-OVERLAP_FRAC  = 0.15
+# Chunk sizes are measured in whitespace tokens (words) — a fast, deterministic
+# proxy for model tokens (~1.3 model-tokens/word EN, more for CS). Values are
+# calibrated so a chunk stays well under ~600 model tokens.
+CHUNK_TARGET_WORDS = 300   # packing target when a section must be split (~380-400 model tokens)
+CHUNK_MAX_WORDS    = 480   # hard ceiling (~600 model tokens): a section at/under this is kept
+                           # WHOLE — never split merely to hit the target (no partial answers)
+OVERLAP_FRAC       = 0.15  # sentence overlap carried between split chunks, as a fraction of target
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("ingester")
@@ -147,81 +151,194 @@ def iter_csv(path: pathlib.Path) -> Iterator[dict]:
 # PROSE PATH
 # ============================================================================
 def _approx_tokens(s: str) -> int:
+    """Whitespace-token (word) count — the deterministic size proxy for chunking."""
     return len(s.split())
 
 
-def _chunk_paragraphs(paras: list[str]) -> Iterator[str]:
-    """~256-384 token chunks, ~15% overlap, on paragraph boundaries."""
-    buf, buf_tok = [], 0
-    for p in paras:
-        pt = _approx_tokens(p)
-        if buf and buf_tok + pt > CHUNK_MAX_TOK:
-            yield "\n".join(buf)
-            keep, keep_tok = [], 0
-            for q in reversed(buf):
-                qt = _approx_tokens(q)
-                if keep_tok + qt > OVERLAP_FRAC * CHUNK_MAX_TOK:
-                    break
-                keep.insert(0, q); keep_tok += qt
-            buf, buf_tok = keep, keep_tok
-        buf.append(p); buf_tok += pt
-        if buf_tok >= CHUNK_MAX_TOK:
-            yield "\n".join(buf); buf, buf_tok = [], 0
-    if buf:
-        yield "\n".join(buf)
+# A section is (section_title, subsection_title, blocks); a block is a paragraph
+# as (text, start_line, end_line) with 1-based source line span. Heading lines are
+# consumed as boundaries and never appear in a block's text.
+_MD_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+# Sentence boundary: terminator (. ! ? … incl. CS) followed by whitespace + next
+# glyph. This is the FINEST granularity we ever split at — a chunk never cuts a
+# sentence mid-way, so retrieval can't hand the model a truncated instruction.
+_SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=\S)")
+
+# Markdown decoration to strip for the embedding-only text_clean. We keep link
+# TARGET text AND url tokens (hostnames/paths matter to the sparse branch); only
+# the syntactic scaffolding is removed so it stops polluting the dense vector.
+_MD_CLEAN = [
+    (re.compile(r"`{1,3}([^`]*)`{1,3}"),        r"\1"),   # code spans
+    (re.compile(r"!?\[([^\]]*)\]\(([^)]+)\)"),  r"\1 \2"),# links/images -> text + url
+    (re.compile(r"(\*\*|__)(.*?)\1"),           r"\2"),   # bold
+    (re.compile(r"(?<!\w)(\*|_)(.*?)\1(?!\w)"), r"\2"),   # italic
+    (re.compile(r"^\s{0,3}#{1,6}\s+", re.M),    ""),      # residual headings
+    (re.compile(r"^\s{0,3}>\s?", re.M),         ""),      # blockquote markers
+    (re.compile(r"^\s{0,3}([-*+]|\d+[.)])\s+", re.M), ""),# list markers
+]
 
 
-def _emit_sections(path: pathlib.Path, sections: list) -> Iterator[dict]:
+def _strip_md(text: str) -> str:
+    """Strip Markdown syntax for embedding; keep all word content (incl. urls)."""
+    for pat, repl in _MD_CLEAN:
+        text = pat.sub(repl, text)
+    text = text.replace("|", " ")                 # table pipes
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
+
+
+def _heading_titles(level: int, title: str, sec: str, sub: str) -> tuple[str, str]:
+    """Fold a new heading into (section_title, subsection_title). A top-level (or
+    first-seen) heading opens a fresh section and clears the subsection; a deeper
+    heading becomes the subsection under the current section."""
+    if level <= 1 or not sec:
+        return title, ""
+    return sec, title
+
+
+def _overlap_tail(text: str) -> str:
+    """Trailing whole sentences of `text`, up to OVERLAP_FRAC*target words — carried
+    into the next chunk so a topic that straddles a split boundary appears in both."""
+    budget = OVERLAP_FRAC * CHUNK_TARGET_WORDS
+    keep, tok = [], 0
+    for s in reversed(_SENT_SPLIT.split(text)):
+        st = _approx_tokens(s)
+        if keep and tok + st > budget:
+            break
+        keep.insert(0, s); tok += st
+    return " ".join(keep).strip()
+
+
+def _units(blocks: list) -> Iterator[tuple[str, int, int]]:
+    """Flatten blocks into packable units, each <= CHUNK_MAX_WORDS *or* an
+    indivisible single sentence. An oversized paragraph is broken at sentence
+    boundaries only; a lone sentence over the ceiling is emitted whole (we never
+    cut a sentence)."""
+    for text, start, end in blocks:
+        if _approx_tokens(text) <= CHUNK_MAX_WORDS:
+            yield text, start, end
+        else:
+            for sent in _SENT_SPLIT.split(text):
+                sent = sent.strip()
+                if sent:
+                    yield sent, start, end   # line span approximated to the paragraph
+
+
+def _chunk_blocks(blocks: list) -> Iterator[tuple[str, int, int]]:
+    """Pack a section's blocks into ~CHUNK_TARGET_WORDS chunks with sentence
+    overlap. Yields (raw_text, start_line, end_line). Only reached for sections
+    that exceed CHUNK_MAX_WORDS — smaller sections are emitted whole upstream."""
+    buf: list[str] = []
+    btok = 0
+    bstart = bend = None
+    prev = None  # last emitted chunk text, for overlap seeding
+
+    def close():
+        nonlocal buf, btok, bstart, bend, prev
+        if buf:
+            prev = "\n".join(buf)
+            yield_val = (prev, bstart, bend)
+            buf, btok, bstart, bend = [], 0, None, None
+            return yield_val
+        return None
+
+    for text, start, end in _units(blocks):
+        t = _approx_tokens(text)
+        if buf and btok + t > CHUNK_TARGET_WORDS:
+            out = close()
+            if out:
+                yield out
+        if not buf:
+            tail = _overlap_tail(prev) if prev else ""
+            if tail:
+                buf.append(tail); btok += _approx_tokens(tail)
+            bstart, bend = start, end   # span tracks the real units, not the overlap
+        buf.append(text); btok += t; bend = end
+    out = close()
+    if out:
+        yield out
+
+
+def _emit_sections(path: pathlib.Path, sections: list, markdown: bool) -> Iterator[dict]:
+    """Turn sections into chunk records. A section at/under CHUNK_MAX_WORDS is kept
+    WHOLE (one chunk) so a coherent section is never split just to hit the target;
+    larger sections are recursively split at sentence boundaries with overlap."""
     cidx = 0
-    for heading, paras in sections:
-        for chunk in _chunk_paragraphs(paras):
-            chunk = chunk.strip()
-            if not chunk:
+    for sec_title, sub_title, blocks in sections:
+        if not blocks:
+            continue
+        total = sum(_approx_tokens(b[0]) for b in blocks)
+        if total <= CHUNK_MAX_WORDS:
+            pieces = [("\n".join(b[0] for b in blocks), blocks[0][1], blocks[-1][2])]
+        else:
+            pieces = _chunk_blocks(blocks)
+        for raw, start, end in pieces:
+            raw = raw.strip()
+            if not raw:
                 continue
+            clean = _strip_md(raw) if markdown else raw
             yield {
-                "id": point_id(path.name, heading or "_", cidx),
-                "text": chunk,
+                "id": point_id(path.name, sec_title or "_", cidx),
+                "text": raw,          # verbatim -> returned to the LLM
+                "text_clean": clean,  # decoration-stripped -> embedding input only
                 "payload": {
-                    "source_file": path.name, "heading": heading,
-                    "chunk_index": cidx, "kind": "doc_text",
-                    "lang": detect_lang(chunk), "text": chunk,
+                    "source_file": path.name,
+                    "section_title": sec_title,
+                    "subsection_title": sub_title,
+                    "heading": sec_title,            # kept for current retrieval's `location`
+                    "chunk_index": cidx,
+                    "chunk_start_line": start,
+                    "chunk_end_line": end,
+                    "kind": "doc_text",
+                    "lang": detect_lang(clean),
+                    "text": raw,
+                    "text_clean": clean,
                 },
             }
             cidx += 1
 
 
-_MD_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
-
-
 def _sections_from_lines(lines: list, markdown: bool) -> list:
-    sections, heading, paras, buf = [], "", [], []
+    """Parse lines into sections with heading titles and line-spanned blocks."""
+    sections: list = []
+    sec = sub = ""
+    blocks: list = []
+    buf: list[str] = []
+    buf_start = None
 
-    def flush_para():
+    def flush_para(end_line):
+        nonlocal buf, buf_start
         if buf:
-            paras.append(" ".join(buf)); buf.clear()
+            blocks.append((" ".join(buf), buf_start, end_line))
+            buf, buf_start = [], None
 
-    for ln in lines:
+    def flush_section():
+        nonlocal blocks
+        if blocks:
+            sections.append((sec, sub, blocks)); blocks = []
+
+    for i, ln in enumerate(lines, start=1):
         s = ln.rstrip("\n")
         m = _MD_HEADING.match(s) if markdown else None
         if m:
-            flush_para()
-            if paras or heading:
-                sections.append((heading, paras)); paras = []
-            heading = m.group(2).strip()
+            flush_para(i - 1)
+            flush_section()
+            sec, sub = _heading_titles(len(m.group(1)), m.group(2).strip(), sec, sub)
         elif s.strip() == "":
-            flush_para()
+            flush_para(i - 1)
         else:
+            if buf_start is None:
+                buf_start = i
             buf.append(s.strip())
-    flush_para()
-    if paras or heading:
-        sections.append((heading, paras))
-    return sections or [("", [])]
+    flush_para(len(lines))
+    flush_section()
+    return sections
 
 
 def iter_text(path: pathlib.Path, markdown: bool) -> Iterator[dict]:
     raw = path.read_text(encoding="utf-8", errors="replace")
     sections = _sections_from_lines(raw.splitlines(), markdown)
-    yield from _emit_sections(path, sections)
+    yield from _emit_sections(path, sections, markdown)
 
 
 def iter_pdf(path: pathlib.Path) -> Iterator[dict]:
@@ -239,7 +356,29 @@ def iter_pdf(path: pathlib.Path) -> Iterator[dict]:
         return
     lines = "\n\n".join(page_texts).splitlines()
     sections = _sections_from_lines(lines, markdown=False)
-    yield from _emit_sections(path, sections)
+    yield from _emit_sections(path, sections, markdown=False)
+
+
+def _docx_heading_level(p) -> int:
+    """Heading level for a docx paragraph, or 0 if it's body text.
+
+    Two signals, because this corpus's headings are often *bold body text* rather
+    than real Heading styles (the reason whole sections used to collapse into one
+    giant chunk):
+      1. a real 'Heading N' / 'Title' style  -> level N (Title -> 1);
+      2. a short, standalone, fully-bold line -> level 1 (bold-run fallback).
+    """
+    name = (p.style.name or "").lower() if p.style is not None else ""
+    if name.startswith("heading") or name == "title":
+        m = re.search(r"(\d+)", name)
+        return int(m.group(1)) if m else 1
+    txt = p.text.strip()
+    if txt and _approx_tokens(txt) <= 12 and len(txt) <= 80:
+        runs = [r for r in p.runs if r.text.strip()]
+        style_bold = bool(p.style is not None and p.style.font is not None and p.style.font.bold)
+        if runs and all(bool(r.bold) or style_bold for r in runs):
+            return 1
+    return 0
 
 
 def iter_docx(path: pathlib.Path) -> Iterator[dict]:
@@ -267,20 +406,30 @@ def iter_docx(path: pathlib.Path) -> Iterator[dict]:
                 },
             }
 
-    sections, heading, paras = [], "", []
-    for p in doc.paragraphs:
+    sections: list = []
+    sec = sub = ""
+    blocks: list = []
+
+    def flush_section():
+        nonlocal blocks
+        if blocks:
+            sections.append((sec, sub, blocks)); blocks = []
+
+    # Paragraph ordinal (1-based over ALL paragraphs incl. blanks) is the
+    # docx "line" proxy — Word has no source lines, so chunk_start/end_line cite
+    # paragraph position instead.
+    for i, p in enumerate(doc.paragraphs, start=1):
         txt = p.text.strip()
         if not txt:
             continue
-        if p.style and p.style.name and p.style.name.lower().startswith("heading"):
-            if paras or heading:
-                sections.append((heading, paras)); paras = []
-            heading = txt
+        lvl = _docx_heading_level(p)
+        if lvl:
+            flush_section()
+            sec, sub = _heading_titles(lvl, txt, sec, sub)
         else:
-            paras.append(txt)
-    if paras or heading:
-        sections.append((heading, paras))
-    yield from _emit_sections(path, sections)
+            blocks.append((txt, i, i))
+    flush_section()
+    yield from _emit_sections(path, sections, markdown=False)
 
 
 # --- routing ----------------------------------------------------------------
@@ -358,9 +507,14 @@ def _upsert_records(qc: QdrantClient, collection: str, records: list[dict]) -> l
     """
     if not records:
         return []
-    dense, sparse = embed([r["text"] for r in records], kind="passage")
+    # Embed the decoration-stripped text_clean (prose); table rows have no clean
+    # variant, so fall back to their verbatim text. Mirror the value into the
+    # payload so every point stores the exact string its vectors were built from.
+    emb_texts = [r.get("text_clean") or r["text"] for r in records]
+    dense, sparse = embed(emb_texts, kind="passage")
     points, ids = [], []
-    for r, dv, sv in zip(records, dense, sparse):
+    for r, et, dv, sv in zip(records, emb_texts, dense, sparse):
+        r["payload"].setdefault("text_clean", et)
         pid = str(uuid.uuid4())
         ids.append(pid)
         points.append(qm.PointStruct(
