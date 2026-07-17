@@ -43,7 +43,11 @@ GROUNDING_SYSTEM = (
     "You are an infrastructure assistant for the ŠA / EPC hosting environment.\n\n"
     "RULE 1 — act via tools first, silently: choose the right tool and call it BEFORE "
     "writing anything. NEVER answer from your own knowledge, and NEVER write text before a "
-    "tool call — no announcements, no explanations, no mention of tools/functions. Routing:\n"
+    "tool call — no announcements, no explanations, no mention of tools/functions. Call the "
+    "tool AGAIN on every request whose answer depends on live infrastructure state, even an "
+    "identical question you already answered earlier in this conversation — never reuse a "
+    "previous turn's result or answer from conversation history; live facts can change between "
+    "messages. Routing:\n"
     "  - documented facts (hosts, IPs, VLANs, FQDNs, access/backup procedures) -> search_corpus\n"
     "  - where a VM runs / what runs on a host (live placement) -> where_is_vm / list_vms_on_host\n"
     "  - reboot/restart/bounce a hypervisor host -> reboot_host (it will require the user to confirm)\n\n"
@@ -53,6 +57,42 @@ GROUNDING_SYSTEM = (
     "reboot was cancelled or a host is not allowlisted), say exactly that. Reply in the same "
     "language as the question (Czech question -> Czech answer); name the source when useful."
 )
+
+# Advanced params mirrored from the OWUI model UI (Workspace -> Model -> Advanced),
+# captured verbatim from the live model config so re-running this script reproduces
+# the exact tuning. Three groups:
+#   - determinism: greedy decode (temp 0, top_k 1, top_p/min_p 0), fixed seed, all
+#     penalties/mirostat neutralized. Must match the llama-server unit's sampler
+#     flags so the UI path and the raw endpoint decode identically.
+#   - agent behavior: native (schema-side) tool calling so tool specs survive OWUI
+#     context compaction; compact at 24k tokens (well under the 32k llama ctx);
+#     streaming with 1-token deltas.
+#   - memory: mmap + mlock the weights resident.
+MODEL_PARAMS = {
+    "system": GROUNDING_SYSTEM,
+    "function_calling": "native",
+    # determinism (greedy, fixed seed)
+    "temperature": 0,
+    "top_k": 1,
+    "top_p": 0,
+    "min_p": 0,
+    "seed": 42,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "repeat_penalty": 1,
+    "repeat_last_n": 0,
+    "mirostat": 0,
+    "mirostat_eta": 0,
+    "mirostat_tau": 0,
+    "tfs_z": 1,
+    # client-side agent behavior
+    "compact_token_threshold": 24000,
+    "stream_response": True,
+    "stream_delta_chunk_size": 1,
+    # keep weights resident
+    "use_mmap": True,
+    "use_mlock": True,
+}
 
 
 def get_token() -> str:
@@ -120,7 +160,7 @@ def main() -> None:
             "toolIds": tool_ids,
             "capabilities": {"citations": True},
         },
-        "params": {"system": GROUNDING_SYSTEM, "function_calling": "native"},
+        "params": MODEL_PARAMS,
         "access_grants": [],
         "is_active": True,
     }
