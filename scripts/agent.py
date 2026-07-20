@@ -83,6 +83,14 @@ SCENARIOS = {
         ("Kde běží VM sftp-gw?", "where_is_vm"),
         ("Rebootuj host node-03.", "reboot_host"),
     ],
+    # multi-tool: a turn's `expect` may be a TUPLE — the turn passes only if EVERY
+    # named tool was called. Both turns avoid RAG so the demo stays fast.
+    "multi": [
+        # chained: locate the VM, then reboot the host it runs on (2 sequential tools)
+        ("Zjisti kde běží VM sftp-gw a pak rebootuj ten host.", ("where_is_vm", "reboot_host")),
+        # two independent facts in one question (clock + placement)
+        ("Kolik je hodin a kde běží VM sftp-gw?", ("get_current_timestamp", "where_is_vm")),
+    ],
 }
 
 
@@ -280,7 +288,10 @@ def run_turn(messages, tools, registry, auto_yes, max_rounds=6):
             called.append(name)
             t0 = time.time()
             result = execute(name, args, registry, auto_yes)
-            steps.append({"kind": "tool", "name": name, "wall": time.time() - t0})
+            # Read (don't strip) the server's per-stage breakdown so the model still
+            # sees byte-identical content to OWUI; we just also surface it in metrics.
+            timing = result.get("_timing_ms") if isinstance(result, dict) else None
+            steps.append({"kind": "tool", "name": name, "wall": time.time() - t0, "timing": timing})
             messages.append({"role": "tool", "tool_call_id": c.get("id", ""),
                              "content": json.dumps(result, ensure_ascii=False)})
     return _turn_metrics("! still calling tools after max rounds", called, prompt_tok, steps)
@@ -299,7 +310,11 @@ def render_steps(steps) -> list:
     out = []
     for s in steps:
         if s["kind"] == "tool":
-            out.append(f"      · tool        {s['name']:<28} {s['wall']:6.2f}s")
+            line = f"      · tool        {s['name']:<28} {s['wall']:6.2f}s"
+            tm = s.get("timing")
+            if tm:  # server-side per-stage split (search_corpus): embed/fuse/rerank/expand
+                line += "   [" + " ".join(f"{k[:-3]} {v/1000:.2f}s" for k, v in tm.items()) + "]"
+            out.append(line)
         else:
             label = "deliberate" if s["kind"] == "deliberate" else "answer    "
             arrow = ("  →  " + ", ".join(s["calls"])) if s["calls"] else ""
@@ -309,11 +324,19 @@ def render_steps(steps) -> list:
     return out
 
 
+def _expect_ok(expect, called):
+    """None if no expectation; else True iff EVERY expected tool (str, or each of a
+    tuple) substring-matches something in `called`. Supports multi-tool turns."""
+    if expect is None:
+        return None
+    wants = expect if isinstance(expect, (list, tuple)) else (expect,)
+    return all(any(w in c for c in called) for w in wants)
+
+
 def _fmt_row(m, n=0, expect=None, elided=0):
     tools_str = ",".join(m["called"]) or "—"
-    ok = "  "
-    if expect is not None:
-        ok = "OK" if any(expect in c for c in m["called"]) else "!!"
+    ok_flag = _expect_ok(expect, m["called"])
+    ok = "  " if ok_flag is None else ("OK" if ok_flag else "!!")
     want = f"  (want {expect})" if expect is not None else ""
     return (f"{ok} {n:>2} | ctx {m['prompt_tokens']:>6} | elided {elided:>2} | "
             f"think {m['think_s']:4.1f}s · tools {m['tool_s']:4.1f}s · answer {m['answer_s']:5.1f}s | "
@@ -357,7 +380,7 @@ def run_scenario(name, args):
         print(f"    < {m['answer'][:220]}")
         row = _fmt_row(m, n, expect, elided)
         print("   ", row)
-        if expect is not None and not any(expect in c for c in m["called"]):
+        if _expect_ok(expect, m["called"]) is False:
             fails += 1
         rows.append(row)
     print("\n" + "=" * 78 + f"\nSUMMARY ({name}) — {len(rows)} turns, {fails} tool-routing miss(es)\n")

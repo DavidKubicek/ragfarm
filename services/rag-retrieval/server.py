@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import math
 import logging
 
@@ -214,9 +215,17 @@ def search_corpus(query: str, k: int = 8) -> dict:
         k: number of chunks to return after re-ranking (default 8). Raise it for
            "list all …" questions where many distinct records match.
     """
+    # Per-stage timing (ms) — returned as `_timing_ms` so any client (agent.py,
+    # the OWUI result panel) can see where a slow query went; the cross-encoder
+    # rerank is usually the dominant cost. Tiny payload; clients ignore it freely.
+    tm = {}
+    _t = time.perf_counter()
     dense, sparse = _embed_query(query)
+    tm["embed_ms"] = round((time.perf_counter() - _t) * 1000, 1)
+
     # Broad-in: fuse a large candidate pool. Dense vectors are still fetched so the
     # legacy MMR path can measure redundancy; the reranker path ignores them.
+    _t = time.perf_counter()
     res = _qc.query_points(
         collection_name=COLL,
         prefetch=[
@@ -228,13 +237,18 @@ def search_corpus(query: str, k: int = 8) -> dict:
         with_payload=True,
         with_vectors=["dense"],
     )
+    tm["fuse_ms"] = round((time.perf_counter() - _t) * 1000, 1)
+
     # Narrow-out: cross-encoder rerank (default) or legacy MMR. Both yield
     # (point, score) so the returned score always matches the ordering.
+    _t = time.perf_counter()
     if USE_RERANK:
         selected = _rerank(query, res.points, k, MIN_SCORE)
     else:
         selected = [(p, p.score) for p in _mmr(res.points, k, MMR_LAMBDA)]
+    tm["rerank_ms"] = round((time.perf_counter() - _t) * 1000, 1)
 
+    _t = time.perf_counter()
     hits = []
     for p, score in selected:
         pl = p.payload or {}
@@ -250,8 +264,11 @@ def search_corpus(query: str, k: int = 8) -> dict:
             "kind": pl.get("kind"),
             "lang": pl.get("lang"),
         })
-    log.info("search_corpus q=%r k=%d -> %d/%d cands", query[:80], k, len(hits), len(res.points))
-    return {"query": query, "count": len(hits), "results": hits}
+    tm["expand_ms"] = round((time.perf_counter() - _t) * 1000, 1)
+    log.info("search_corpus q=%r k=%d -> %d/%d cands  embed=%.0f fuse=%.0f rerank=%.0f expand=%.0f ms",
+             query[:80], k, len(hits), len(res.points),
+             tm["embed_ms"], tm["fuse_ms"], tm["rerank_ms"], tm["expand_ms"])
+    return {"query": query, "count": len(hits), "results": hits, "_timing_ms": tm}
 
 
 if __name__ == "__main__":
