@@ -9,8 +9,9 @@ need better first-stage recall / query expansion). This dumps the fused RRF pool
 and with --branches the dense-only and sparse-only lists too, so you can see which
 signal surfaced (or failed to surface) each chunk.
 
-This mirrors what rag-retrieval/server.py does BEFORE the MMR re-rank + window
-expansion — it is deliberately the raw first-stage view.
+This mirrors what rag-retrieval/server.py does BEFORE the cross-encoder re-rank
+(ADR-0008; bge-reranker-v2-m3) + window expansion — it is deliberately the raw
+first-stage view, so you can tell a ranking problem from a recall problem.
 
 USAGE
   .venv/bin/python scripts/rag_pool_inspect.py "Jak se přihlásím do EPC?"

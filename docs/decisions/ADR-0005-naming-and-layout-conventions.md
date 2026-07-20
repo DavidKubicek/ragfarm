@@ -41,8 +41,15 @@ sound like they conflict but do not:
 
 ### The canonical component registry (the one table to read)
 
-This table is the source of truth. Every other name is derived from the **short
-name** column. It lives here and is mirrored (abbreviated) in
+> **Live inventory moved (2026-07-20, ADR-0008).** This ADR remains authoritative
+> for the *rules* — how every name/port/mount is derived from the short name (the
+> sections below). The *current running inventory* (which now includes the
+> reranker `/rerank` endpoint) is maintained in `docs/deployment.md`; treat that as
+> the live registry and this table as the snapshot at this ADR's decision. The
+> naming rules a new component must follow are still governed here.
+
+This table is the source of truth for the naming derivation. Every other name is
+derived from the **short name** column. It is mirrored (abbreviated) in
 `services/mcp-gateway/README.md`.
 
 | plane      | short name    | directory                    | compose service / container* | port  | mcpo mount     | agent-facing surface            | mutates |
