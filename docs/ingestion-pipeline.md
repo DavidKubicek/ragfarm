@@ -170,7 +170,67 @@ against.
   VLAN is host X on" (lexical) and "how do we handle host maintenance" (semantic,
   either language).
 
-## 7. Verification (feeds step 04's gate)
+## 7. The automatic watcher (deployed autonomous sync)
+This expands §5's `--watch` mode into the full operational picture — it is how the
+corpus stays in sync in normal running, with **no manual ingest**.
+
+### Deployment
+The watcher runs as the systemd service **`ragfarm-ingester-watcher`** (host, as
+`dave`): `ingester.py --watch`, `Restart=on-failure`, logs to
+`logs/ingester-watcher.log`. It `Wants`/`After` `ragfarm-embedder.service` because
+every pass calls `/embed` — the embedder must be up first. It reads
+`CORPUS_PATH=/data/corpus`, writes through the alias `corpus`
+(`QDRANT_COLLECTION`), and keeps its manifest in
+`services/ingester/manifest.db` (`MANIFEST_DB`). Start/stop/status like any host
+service (see `docs/deployment.md` → Autostart).
+
+### How a pass is triggered
+A background thread watches `CORPUS_PATH` recursively (watchdog **inotify**
+`Observer`; set `INGEST_WATCH_POLL=1` to use the `PollingObserver` on a network /
+overlay filesystem where inotify is unreliable). Two things schedule a pass:
+- **Event + debounce.** A content-mutating event marks the state *dirty*; a pass
+  runs only after `INGEST_DEBOUNCE` seconds of **quiescence**, so a half-written
+  file is never read and an event storm coalesces into one pass. **Read-only events
+  are ignored** — every pass opens and reads each file to checksum it, which the
+  observer sees as `opened`/`closed_no_write`; reacting to those would let the
+  watcher's own hashing re-arm the debounce and spin forever (a self-feeding loop).
+- **Full-scan backstop.** Regardless of events, a full re-scan runs every
+  `INGEST_SCAN_INTERVAL` seconds, catching anything inotify missed.
+
+### What a pass does
+Exactly the §5 `incremental()` sync, but with **grace-gated deletes**
+(`grace=INGEST_DELETE_GRACE`), embed-before-prune ordered so retrieval never sees a
+gap mid-pass:
+1. **Add** new checksums (parse → embed → upsert, new uuid4 IDs, manifest updated).
+2. **Reconcile** still-present content: cancel a pending departure if a file came
+   back; on a pure rename just refresh `source_file` in the payload — **no re-embed**.
+3. **Depart**: a vanished checksum is only *marked* with a timestamp, not deleted.
+4. **Reap**: content absent for ≥ grace is deleted; reappearing before grace expires
+   cancels the delete. This rides out atomic-save / rsync / editor-swap windows where
+   a file briefly disappears and returns.
+
+### Concurrency & robustness
+- Every pass takes a **non-blocking lock** on the manifest. If a manual run
+  (`--recreate` or a manual incremental, which take the lock *blocking*) is in
+  progress, the watcher **skips that tick and retries next** — the two never
+  double-write. After a manual `--recreate` flips the alias, the watcher's next pass
+  automatically operates on the new physical collection (it resolves the alias each
+  pass), so the two modes compose cleanly.
+- A failed pass is logged and the loop continues; a crashed process is restarted by
+  systemd (`RestartSec=5`).
+- The watcher only does **incremental** sync — it never `--recreate`s. A schema,
+  embedder-model, or chunking change still needs a manual `--recreate` (§5); the
+  watcher then picks up the new collection via the alias.
+
+### Deployed knobs (unit values; all env-overridable)
+| env | unit value | meaning |
+|-----|-----------|---------|
+| `INGEST_DEBOUNCE` | 60 s | quiescence required after an event before a pass |
+| `INGEST_DELETE_GRACE` | 120 s | how long a vanished file is tolerated before its points are pruned |
+| `INGEST_SCAN_INTERVAL` | 3600 s | full re-scan backstop for missed events |
+| `INGEST_WATCH_POLL` | unset (inotify) | `1` → polling observer for network/overlay FS |
+
+## 8. Verification (feeds step 04's gate)
 After ingesting the corpus (or a 2–3 file subset):
 - The offline parser regression passes: `FIXTURES=tests/fixtures python
   services/ingester/test_xlsx_tables.py` → `ALL PASS`.
