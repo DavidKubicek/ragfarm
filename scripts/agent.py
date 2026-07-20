@@ -59,6 +59,7 @@ MCPO_URL = os.environ.get("MCPO_URL", "http://127.0.0.1:8000").rstrip("/")
 MODEL    = os.environ.get("MODEL", "qwen2.5-7b-instruct")
 MOUNTS   = os.environ.get("MOUNTS", "rag,placement").split(",")   # read tools; reboot is injected below
 CTX_BUDGET = int(os.environ.get("CTX_BUDGET", "12000"))           # elide old tool bodies past this
+DEBUG = False                                                     # --debug: dump raw llama responses
 
 # Deterministic sampler, mirroring the deployed model preset (ADR-0007 §3).
 DET = {"temperature": 0, "top_k": 1, "top_p": 0, "min_p": 0, "seed": 42, "stream": False}
@@ -237,7 +238,14 @@ def llama(messages, tools):
     r = requests.post(f"{LLM_URL}/v1/chat/completions", json=body, timeout=300)
     r.raise_for_status()
     d = r.json()
-    return d["choices"][0]["message"], d.get("usage", {}) or {}, d.get("timings", {}) or {}, time.time() - t0
+    choice = d["choices"][0]
+    msg = choice["message"]
+    if DEBUG:
+        tc = msg.get("tool_calls") or []
+        print(f"      [debug] finish={choice.get('finish_reason')!r} "
+              f"tool_calls={[c['function']['name'] for c in tc]} "
+              f"content={(msg.get('content') or '')[:160]!r}", file=sys.stderr)
+    return msg, d.get("usage", {}) or {}, d.get("timings", {}) or {}, time.time() - t0
 
 
 def run_turn(messages, tools, registry, auto_yes, max_rounds=6):
@@ -407,7 +415,11 @@ def main():
     ap.add_argument("--yes", action="store_true", help="auto-approve reboot confirmations (for scripted runs)")
     ap.add_argument("--no-system", action="store_true", help="send no grounding system prompt")
     ap.add_argument("--show-tools", action="store_true", help="print loaded tool names + exit")
+    ap.add_argument("--debug", action="store_true", help="dump raw llama responses (finish_reason, tool_calls, content)")
     args = ap.parse_args()
+
+    global DEBUG
+    DEBUG = args.debug
 
     if args.show_tools:
         tools, _ = load_tools()
