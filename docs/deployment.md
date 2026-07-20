@@ -125,6 +125,16 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   (pulled live from mcpo) and the deployed grounding prompt at deterministic
   settings, feeding canned tool results, to watch which tools the 7B calls with what
   arguments across rounds. Regression-check routing after a prompt/schema change.
+- `agent.py` — headless multi-turn agent over the same stack (llama-server + mcpo
+  tools + the deployed grounding prompt) but with a context loop **we own and
+  measure**. Unlike `trace_tool_calls.py` it EXECUTES tools for real (incl. a CLI
+  reboot confirm mirroring `reboot_guarded.py`) and carries real history. Modes:
+  interactive REPL, one-shot prompts, or scripted benchmarks (`--scenario
+  reboot-canary`). Per turn it splits and times the **deliberate / tool / answer**
+  stages (prefill vs decode each) and reports context size + how many old tool
+  results were elided. This is the control for isolating an OWUI-loop bug from a
+  model/stack bug — e.g. it reproduced the repeated-reboot miss with no OWUI in the
+  loop, proving that failure is model discipline, not compaction.
 
 ## Open WebUI configuration (reproducible, not hand-clicked)
 OWUI stores config in its `openwebui_data` volume. Recreate it with
