@@ -180,7 +180,12 @@ cluster. Set `ONE_MOCK=0`/`HOST_MOCK=0` (and fill `.env`) at deployment.
 Per ADR-0003 the durable layer (Open WebUI, mcpo, MCP servers, `search_corpus`,
 Qdrant) is HW-agnostic and should NOT be re-architected. Concrete changes:
 - **Inference**: replace llama.cpp/Vulkan with a CUDA server (vLLM/TGI/llama.cpp-CUDA).
-  Repoint `OPENAI_API_BASE_URL` only. Keep the OpenAI-compatible contract.
+  Repoint `OPENAI_API_BASE_URL` only. Keep the OpenAI-compatible contract. This is
+  also the moment to move off the 7B: a ~30B model (e.g. Qwen2.5-32B) is expected to
+  resolve most observed 7B issues — tool-calling discipline (the repeated-reboot miss,
+  ADR-0008/agent.py), verbose rambling answers, and instruction-following — and brings
+  a larger native context. Tensor-parallel across two GPUs buys still-larger context /
+  throughput if needed. Nothing in the durable layer changes (ADR-0003).
 - **Embedder + reranker**: BGE-M3 (`/embed`) and bge-reranker-v2-m3 (`/rerank`, ADR-0008)
   both move onto the GPU (CUDA); keep the `/embed` dense+sparse and `/rerank`
   contracts on `:8090`. Re-ingest is unnecessary if the embedder model+revision are

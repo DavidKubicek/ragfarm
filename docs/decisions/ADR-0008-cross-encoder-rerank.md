@@ -1,8 +1,11 @@
 # ADR-0008 — Cross-encoder re-ranking replaces MMR in search_corpus
 
-Status: ACCEPTED (2026-07-20). Implemented and live; validated end-to-end on the
-corpus (see Validation below).
-Date: 2026-07-20
+Status: PENDING (reopened 2026-07-21). The ranking-**quality** decision is validated
+and staying — the cross-encoder fixed the MMR failure (see Validation). What is NOT
+settled is its **latency cost**: the CPU rerank was measured at **~36 s per query**,
+not the ~1–2 s first estimated. This ADR stays open until a mitigation is chosen and
+re-measured; findings accumulate in "Measured latency" below.
+Date: 2026-07-20 (reopened 2026-07-21)
 Builds on: ADR-0002 (BGE-M3 dense+sparse embedder, CPU model host on :8090),
 ADR-0003 (rag-retrieval owns corpus RAG in the MCP layer), ADR-0007 (section-aware
 chunking + broad-in/narrow-out retrieval; this ADR supersedes its §2 **MMR** step).
@@ -110,10 +113,57 @@ Positive:
 Negative / cost:
 - The embedder host holds a second ~2.3 GB model once `/rerank` is first hit.
 - One extra HTTP round-trip and a cross-encoder forward pass over ~40 candidates per
-  query (~1–2 s CPU). Acceptable for the interactive PoC; trim `RAG_CANDIDATES` if it
-  drags.
+  query. **First estimated at ~1–2 s CPU; MEASURED at ~36 s** (see "Measured
+  latency"). This is the open cost that keeps the ADR PENDING.
 
 Neutral / open:
 - `RAG_MIN_SCORE` is 0.0 (off) pending calibration on accumulated result dumps.
 - `RAG_CANDIDATES=40` is a starting point; larger pools cost linearly at rerank time.
 - The legacy MMR path remains available (`RAG_USE_RERANKER=0`) purely for A/B.
+
+## Measured latency (2026-07-21) — why this ADR is PENDING
+
+`search_corpus` now returns a per-stage `_timing_ms` split (embed / fuse / rerank /
+expand; `services/rag-retrieval/server.py`). Measured on a real query
+(`"hesla pro EPC"`, `k=5`, `RAG_CANDIDATES=40`, reranker **warm**):
+
+| stage | time |
+|-------|------|
+| embed | 0.2 s |
+| fuse (Qdrant hybrid RRF) | 0.02 s |
+| **rerank (cross-encoder)** | **~36 s** |
+| expand | 0.006 s |
+
+The cross-encoder is **~99 %** of retrieval latency. An isolated `/rerank` of 40
+short synthetic docs was ~10 s; ~36 s is with real corpus candidates (wide table
+rows / multi-line chunks → many more tokens per pair) and is repeatable. This is
+inference, **not** model load.
+
+### Not the cause: lazy loading
+Loading `bge-reranker-v2-m3` on the first `/rerank` costs ~15–20 s **once** after an
+embedder (re)start; it does not recur, and the 36 s was measured warm. So
+**eager-loading at unit start would not reduce per-query latency** — it would only
+move the one-time first-call penalty into embedder startup. Pre-loading (an
+`@lifespan` warm-up) is defensible for first-call UX since the reranker is used on
+essentially every RAG query, but it is orthogonal to the real problem — low priority.
+
+### Candidate mitigations (evaluate, then record the winner + numbers here)
+1. **`RAG_CANDIDATES` 40 → 20** — rerank cost is ~linear in pool size; ~halves it.
+   Cheapest lever; observed score cliffs are sharp, so recall should hold.
+2. **Cap the per-candidate text** sent to the reranker (not the returned text) — the
+   wide table rows are the token hogs; truncating the rerank input cuts per-pair cost.
+3. **CPU threads / niceness** — ensure the reranker isn't single-threaded and isn't
+   starving llama-server (idle vs under-load varied ~10 s → 36–50 s).
+4. **ONNX int8 quantization** of the cross-encoder on CPU — typically 2–4× faster;
+   the biggest CPU-only win, at the cost of a ranking-quality re-check.
+5. **GPU rerank** — the real fix, but hardware-gated: cheap on prod NVIDIA, a genuine
+   bother on the current AMD iGPU (Vulkan-only per ADR-0001; ROCm on gfx1150 is
+   unofficial; the iGPU is already saturated by the 7B LLM). Deferred to prod HW.
+
+### Hardware trajectory (out of scope for the decision; noted for the prod-HW plan)
+Much of the current pain — 7B tool-discipline flakiness, over-long answers, and this
+CPU rerank cost — eases on the planned prod NVIDIA box: a ~30 B model (better
+instruction-following, larger native context, tensor-parallel across two cards for
+still-larger context / throughput) plus CUDA rerank. Per ADR-0003 the durable layer
+is HW-agnostic; model and rerank device swap without re-architecture. Tracked in
+`docs/deployment.md` → "What changes on prod NVIDIA hardware".
