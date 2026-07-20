@@ -9,22 +9,31 @@ in the MCP layer (Option B) instead of Open WebUI's generic document RAG.
 
 Retrieval pipeline (broad-in, narrow-out — the fix for "one dense irrelevant slab
 outscores the precise chunk"):
-  1. hybrid RRF over a BROAD candidate pool (RAG_CANDIDATES, default 20);
-  2. MMR re-rank (RAG_MMR_LAMBDA, default 0.3) — relevance is the fused RRF score,
-     redundancy is dense cosine, so near-duplicate slabs stop crowding the top-k;
-  3. return only k (default 5) chunks, each widened to a bounded SAME-SECTION
-     window (RAG_EXPAND_NEIGHBORS chunks each side, capped) so a split section is
-     reunited without dragging in unrelated sections;
+  1. hybrid RRF over a BROAD candidate pool (RAG_CANDIDATES, default 40);
+  2. CROSS-ENCODER re-rank (bge-reranker-v2-m3, RAG_USE_RERANKER=1) — each
+     (query, chunk) pair is scored directly, so genuine relevance floats to the
+     top and topically-different noise sinks, with NO diversity penalty. Legacy
+     MMR (RAG_MMR_LAMBDA) is retained behind RAG_USE_RERANKER=0 for A/B only; see
+     ADR-0008 for why MMR mis-fires on the small row-per-record chunks (it reads a
+     list of near-identical contact rows as "redundant" and evicts the answers);
+  3. drop anything below RAG_MIN_SCORE (reranker path only; 0.0 = keep all until
+     the floor is calibrated on real dumps), then return the top k (default 8),
+     each widened to a bounded SAME-SECTION window (RAG_EXPAND_NEIGHBORS chunks
+     each side, capped) so a split section is reunited without dragging in
+     unrelated sections;
   4. verbatim payload text (`text` == ingester's text_raw) is what's returned to
      the model — never the embedding-only text_clean — plus section/subsection and
      source line-span metadata for exact citation.
 
+The returned `score` matches the ordering: the reranker's normalized (sigmoid)
+relevance on the reranker path, the fused RRF score on the legacy MMR path.
+
 Transport: streamable HTTP (MCP), same pattern as the other services, so mcpo /
 the agent layer registers it over HTTP.
 
-Config (env): QDRANT_URL, EMBED_ENDPOINT, QDRANT_COLLECTION, RAG_PORT,
-RAG_PREFETCH, RAG_CANDIDATES, RAG_MMR_LAMBDA, RAG_EXPAND_NEIGHBORS,
-RAG_EXPAND_MAX_WORDS.
+Config (env): QDRANT_URL, EMBED_ENDPOINT, RERANK_ENDPOINT, QDRANT_COLLECTION,
+RAG_PORT, RAG_PREFETCH, RAG_CANDIDATES, RAG_USE_RERANKER, RAG_MIN_SCORE,
+RAG_MMR_LAMBDA, RAG_EXPAND_NEIGHBORS, RAG_EXPAND_MAX_WORDS.
 """
 from __future__ import annotations
 
@@ -40,12 +49,15 @@ from mcp.server.fastmcp import FastMCP
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 EMBED      = os.environ.get("EMBED_ENDPOINT", "http://localhost:8090/embed")
+RERANK_EP  = os.environ.get("RERANK_ENDPOINT", "http://localhost:8090/rerank")  # cross-encoder on the embedder host
 COLL       = os.environ.get("QDRANT_COLLECTION", "corpus")
 HOST       = os.environ.get("RAG_HOST", "0.0.0.0")
 PORT       = int(os.environ.get("RAG_PORT", "8104"))
-PREFETCH   = int(os.environ.get("RAG_PREFETCH", "20"))          # candidates per branch before fusion
-CANDIDATES = int(os.environ.get("RAG_CANDIDATES", "20"))        # fused pool handed to MMR (broad-in)
-MMR_LAMBDA = float(os.environ.get("RAG_MMR_LAMBDA", "0.3"))     # relevance vs diversity (0.3 = diversity-leaning)
+PREFETCH   = int(os.environ.get("RAG_PREFETCH", "40"))          # candidates per branch before fusion
+CANDIDATES = int(os.environ.get("RAG_CANDIDATES", "40"))        # fused pool handed to the re-ranker (broad-in)
+USE_RERANK = os.environ.get("RAG_USE_RERANKER", "1") != "0"     # cross-encoder rerank (default) vs legacy MMR
+MIN_SCORE  = float(os.environ.get("RAG_MIN_SCORE", "0.0"))      # drop reranked hits below this (0.0 = keep all)
+MMR_LAMBDA = float(os.environ.get("RAG_MMR_LAMBDA", "0.3"))     # legacy MMR only: relevance vs diversity
 EXPAND     = int(os.environ.get("RAG_EXPAND_NEIGHBORS", "1"))   # same-section neighbor chunks each side (0=off)
 EXPAND_MAX = int(os.environ.get("RAG_EXPAND_MAX_WORDS", "600")) # word cap on an expanded window
 
@@ -70,7 +82,28 @@ def _embed_query(text: str) -> tuple[list[float], qm.SparseVector]:
     return dense, sparse
 
 
-# --- MMR re-rank -------------------------------------------------------------
+# --- cross-encoder re-rank (default path) ------------------------------------
+def _rerank(query: str, cands: list, k: int, min_score: float) -> list[tuple]:
+    """Score every (query, chunk) pair with the cross-encoder (bge-reranker-v2-m3,
+    served by the embedder host at /rerank), sort by that normalized relevance,
+    drop anything below `min_score`, and return the top k as (point, score)
+    tuples. Unlike MMR there is no diversity term, so N distinct records that
+    share a template (e.g. contact rows) all keep their true scores instead of
+    being suppressed as 'redundant'. The model runs on the embedder service
+    (ADR-0008); this file still owns the ranking POLICY (pool, sort, floor, k)."""
+    if not cands or k <= 0:
+        return []
+    docs = [(p.payload or {}).get("text_clean") or (p.payload or {}).get("text") or ""
+            for p in cands]
+    r = requests.post(RERANK_EP, json={"query": query, "documents": docs, "normalize": True}, timeout=120)
+    r.raise_for_status()
+    scores = r.json()["scores"]
+    ranked = sorted(zip(cands, scores), key=lambda t: t[1], reverse=True)
+    out = [(p, float(s)) for p, s in ranked if s >= min_score]
+    return out[:k]
+
+
+# --- MMR re-rank (legacy fallback, RAG_USE_RERANKER=0) ------------------------
 def _dense_of(point) -> list[float] | None:
     v = getattr(point, "vector", None)
     if isinstance(v, dict):
@@ -167,7 +200,7 @@ def _expand(payload: dict) -> tuple[str, int | None, int | None]:
 
 
 @mcp.tool()
-def search_corpus(query: str, k: int = 5) -> dict:
+def search_corpus(query: str, k: int = 8) -> dict:
     """Search the infrastructure corpus and return the most relevant chunks.
 
     Use for questions about VMs, hosts, hostnames, IP addresses, VLANs, and any
@@ -178,11 +211,12 @@ def search_corpus(query: str, k: int = 5) -> dict:
 
     Args:
         query: the user's question or an identifier to look up.
-        k: number of chunks to return after re-ranking (default 5).
+        k: number of chunks to return after re-ranking (default 8). Raise it for
+           "list all …" questions where many distinct records match.
     """
     dense, sparse = _embed_query(query)
-    # Broad-in: fuse a large candidate pool WITH dense vectors so MMR can measure
-    # redundancy; narrow-out happens in _mmr below.
+    # Broad-in: fuse a large candidate pool. Dense vectors are still fetched so the
+    # legacy MMR path can measure redundancy; the reranker path ignores them.
     res = _qc.query_points(
         collection_name=COLL,
         prefetch=[
@@ -194,14 +228,19 @@ def search_corpus(query: str, k: int = 5) -> dict:
         with_payload=True,
         with_vectors=["dense"],
     )
-    selected = _mmr(res.points, k, MMR_LAMBDA)
+    # Narrow-out: cross-encoder rerank (default) or legacy MMR. Both yield
+    # (point, score) so the returned score always matches the ordering.
+    if USE_RERANK:
+        selected = _rerank(query, res.points, k, MIN_SCORE)
+    else:
+        selected = [(p, p.score) for p in _mmr(res.points, k, MMR_LAMBDA)]
 
     hits = []
-    for p in selected:
+    for p, score in selected:
         pl = p.payload or {}
         text, s_line, e_line = _expand(pl)
         hits.append({
-            "score": p.score,
+            "score": score,
             "text": text,  # verbatim text_raw (possibly widened to a same-section window)
             "source_file": pl.get("source_file"),
             "section_title": pl.get("section_title"),
@@ -216,7 +255,9 @@ def search_corpus(query: str, k: int = 5) -> dict:
 
 
 if __name__ == "__main__":
-    log.info("rag-retrieval on %s:%d  (qdrant=%s coll=%s embed=%s) prefetch=%d cands=%d mmr_lambda=%.2f expand=%d",
-             HOST, PORT, QDRANT_URL, COLL, EMBED, PREFETCH, CANDIDATES, MMR_LAMBDA, EXPAND)
+    log.info("rag-retrieval on %s:%d  (qdrant=%s coll=%s embed=%s) prefetch=%d cands=%d rerank=%s%s min_score=%.3f expand=%d",
+             HOST, PORT, QDRANT_URL, COLL, EMBED, PREFETCH, CANDIDATES,
+             USE_RERANK, (" via=%s" % RERANK_EP) if USE_RERANK else (" mmr_lambda=%.2f" % MMR_LAMBDA),
+             MIN_SCORE, EXPAND)
     # Streamable HTTP transport so mcpo / the agent layer can register it over HTTP.
     mcp.run(transport="streamable-http")

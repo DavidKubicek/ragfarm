@@ -1,8 +1,12 @@
 # ADR-0007 — Retrieval quality: section-aware chunking, hybrid+MMR rerank, client-side context management
 
-Status: PROPOSED (work in progress — decisions are implemented and live, but still
-being tuned/validated against the corpus; promote to ACCEPTED once the eval settles)
-Date: 2026-07-17
+Status: ACCEPTED (2026-07-20). Section-aware chunking, broad-in/narrow-out
+retrieval, and client-side context management are validated on the corpus and
+live. Superseded in part: the **MMR** re-ranker of decision §2 mis-fired on the
+small row-per-record chunks and is replaced by a cross-encoder re-ranker in
+**ADR-0008** (MMR is retained only as a flag-gated A/B fallback). See the
+"Learned failure mode" section appended below.
+Date: 2026-07-17 (accepted 2026-07-20)
 Builds on: ADR-0001 (engine split; iGPU llama.cpp is the interactive LLM),
 ADR-0002 (BGE-M3 dense+sparse embedder), ADR-0003 (rag-retrieval owns corpus RAG in
 the MCP layer; retrieval is the durable layer), ADR-0006 (content-addressed corpus
@@ -148,7 +152,42 @@ Neutral:
    realize their intended purpose. Proposed, not yet applied.
 3. **MMR λ is unswept.** 0.3 (diversity-leaning) is the owner's starting point; the
    relevance/diversity balance needs eval data on the real corpus.
+   → RESOLVED by ADR-0008: MMR retired as the default; no λ to sweep.
 4. **Operational lesson — mcpo boot-race.** Restarting a RAG backend severs mcpo's
    streamable-http MCP session (anyio cancel-scope bug), leaving tools unmounted
    ("Session terminated", empty aggregate spec). `scripts/mcpo-heal.sh` handles this
    on boot; any ad-hoc `rag-retrieval` restart must be followed by an mcpo restart.
+
+## Learned failure mode (appended 2026-07-20) — MMR fights small chunks
+
+Decision §2 added MMR to stop one dense page-sized slab (or its near-duplicates)
+from monopolizing the top-k. That premise was correct **for the page-sized chunks
+this ADR was replacing.** Once §1's chunking shrank chunks to sentence-scoped prose
+and one-row-per-record tables, the premise inverted and MMR became actively harmful.
+
+Observed: `search_corpus("proj vedoucí EPC", k=5)` returned **one** EPC contact row
+and four unrelated infra chunks (Zabbix, VM configs, access notes), even though the
+corpus holds five EPC contact rows each keyed `... Firma: EPC ...`. A `grep` would
+have found them all. Root cause, traced through `_mmr` at λ=0.3
+(`score = 0.3·rel − 0.7·div`):
+
+- The five contact rows share an identical template, so their **dense cosine to one
+  another is high** (~0.8). MMR reads that as redundancy and scores the 2nd–5th
+  contacts strongly negative (`0.3·0.84 − 0.7·0.8 ≈ −0.31`).
+- A topically-different but irrelevant VM-config row has low relevance yet low
+  redundancy, so it scores *higher* (`0.3·0.09 − 0.7·0.2 ≈ −0.11`) and is selected
+  **ahead of** the real answers.
+
+MMR cannot distinguish "redundant restatement of one fact" from "N distinct records
+of the same type." Dense similarity is high in both cases; only the *former* should
+be penalized. For "list all X" queries — a first-class use of this infra corpus —
+redundancy of form is exactly the signal to keep, and MMR discards it.
+
+A second, smaller defect: the returned `score` was the pre-MMR RRF value while the
+order was post-MMR, so results looked mis-sorted (owner-noticed). ADR-0008 returns
+the reranker score, so score and order agree.
+
+Resolution: **ADR-0008** replaces MMR with a cross-encoder (bge-reranker-v2-m3) that
+scores each (query, chunk) pair directly and has no diversity term. Same failing
+query, post-fix, returns all five EPC contact rows (Marek Česal / Řízení projektu
+ranked top at 0.95, the four Projektový tým members 0.18–0.22) and zero noise.

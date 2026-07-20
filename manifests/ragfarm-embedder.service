@@ -11,6 +11,8 @@ User=dave
 EnvironmentFile=-/home/dave/ragfarm/.env
 ExecStart=/home/dave/ragfarm/.venv/bin/python /home/dave/ragfarm/services/embedder/server.py
 Environment=EMBED_MODEL_PATH=/home/dave/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/50f9396f75618b3389c1fd1068a1ff58dc7b5b26
+# Cross-encoder for /rerank (ADR-0008); lazy-loaded on first call, safetensors-only.
+Environment=RERANK_MODEL_PATH=/home/dave/.cache/huggingface/hub/models--BAAI--bge-reranker-v2-m3/snapshots/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
 WorkingDirectory=/home/dave/ragfarm
 Restart=on-failure
 StandardOutput=append:/home/dave/ragfarm/logs/03-embedder-service.log

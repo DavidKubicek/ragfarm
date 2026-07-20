@@ -85,7 +85,8 @@ services:
     environment:
       <<: *proxy_env
       QDRANT_URL: http://127.0.0.1:6333
-      EMBED_ENDPOINT: http://127.0.0.1:8090/embed  # BGE-M3 embedder on host (loopback)
+      EMBED_ENDPOINT: http://127.0.0.1:8090/embed    # BGE-M3 embedder on host (loopback)
+      RERANK_ENDPOINT: http://127.0.0.1:8090/rerank  # bge-reranker-v2-m3 on same host (ADR-0008)
       QDRANT_COLLECTION: corpus
       RAG_HOST: 127.0.0.1
       RAG_PORT: "8104"
