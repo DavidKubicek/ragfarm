@@ -39,7 +39,7 @@ sound like they conflict but do not:
 
 ## Decision
 
-### The canonical component registry (the one table to read)
+### The canonical component registry
 
 > **Live inventory moved (2026-07-20, ADR-0008).** This ADR remains authoritative
 > for the *rules* — how every name/port/mount is derived from the short name (the
