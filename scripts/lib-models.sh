@@ -55,15 +55,20 @@ env_upsert() {
 hf_snapshot() {
 	local repo="$1" dest="$2" revision="${3:-}"
 	"$VENV_PY" - "$repo" "$dest" "$revision" <<'PY'
-import sys
+import sys, os, shutil
 from huggingface_hub import snapshot_download, list_repo_files
 repo, dest, revision = sys.argv[1], sys.argv[2], (sys.argv[3] or None)
 have_safetensors = any(f.endswith(".safetensors") for f in list_repo_files(repo, revision=revision))
+# Keep only what the model LOADS (weights + config + tokenizer). Drop repo bloat:
+# ONNX/OpenVINO exports, images, docs/readmes, git metadata. NOT for security.
 ignore = ["onnx/*", "openvino/*", "*.onnx", "*.onnx_data",
-          "imgs/*", "*.png", "*.jpg", "*.jpeg", "*.webp", "*.gif", "*.pdf", "*.DS_Store"]
+          "imgs/*", "*.png", "*.jpg", "*.jpeg", "*.webp", "*.gif", "*.pdf",
+          "*.md", ".gitattributes", ".gitignore", "*.DS_Store"]
 if have_safetensors:                                   # fast format available -> skip the slow/redundant one
     ignore += ["*.bin", "pytorch_model*", "tf_model*", "flax_model*"]
-print(snapshot_download(repo, revision=revision, local_dir=dest, ignore_patterns=ignore), end="")
+path = snapshot_download(repo, revision=revision, local_dir=dest, ignore_patterns=ignore)
+shutil.rmtree(os.path.join(dest, ".cache"), ignore_errors=True)   # HF local_dir download-metadata
+print(path, end="")
 PY
 }
 

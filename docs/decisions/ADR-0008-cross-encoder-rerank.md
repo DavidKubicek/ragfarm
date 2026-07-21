@@ -72,8 +72,9 @@ Vulkan) — the same engine and device as the LLM (`manifests/ragfarm-reranker.s
 `models/reranker/MODEL.md`). rag-retrieval POSTs candidate texts to `RERANK_ENDPOINT`
 (`:8081/reranking`); llama.cpp returns a **raw logit** per pair, which rag-retrieval
 `sigmoid`s to the [0,1] score contract (byte-identical to the earlier FlagReranker
-`normalize=True`). The GGUF (`models/gguf/bge-reranker-v2-m3-f16.gguf`, gitignored) is
-converted from the cached HF safetensors via `convert_hf_to_gguf.py`.
+`normalize=True`). The GGUF (`models/reranker/bge-reranker-v2-m3/…-f16.gguf`, gitignored)
+is downloaded + converted from the HF weights by `scripts/fetch-encoder.sh` (which
+`deploy.sh` calls), via llama.cpp's `convert_hf_to_gguf.py`.
 
 **Superseded design (2026-07-20 → 2026-07-21).** The reranker was first co-hosted as a
 `POST :8090/rerank` sub-endpoint on the CPU embedder service (FlagReranker, torch), to

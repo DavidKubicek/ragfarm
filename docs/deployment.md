@@ -52,6 +52,23 @@ remote access, login-gated by `WEBUI_AUTH`) or `127.0.0.1` (loopback-only; reach
 via `ssh -L 3000:127.0.0.1:3000 <host>`). **Restrict `:3000` at the host firewall
 to trusted networks** — it's the only externally reachable service.
 
+## Tested model versions (known-good baseline)
+The fetch scripts default to **latest** (easy swapping/experimentation), but the model
+set every gate + eval in this repo was validated against is the pinned one below. Pass
+the `--revision` flags to reproduce it exactly; omit them for latest. These pins are for
+**reproducibility only** — not a security constraint (the old no-pickle rule is retired,
+see the model-format note in `scripts/lib-models.sh`).
+
+| role | model | tested revision | reproduce with |
+|------|-------|-----------------|----------------|
+| LLM | Qwen2.5-7B-Instruct Q4_K_M GGUF (`Qwen/Qwen2.5-7B-Instruct-GGUF`) | GGUF, current | `scripts/fetch-llm.sh` |
+| embedder | `BAAI/bge-m3` | `50f9396f75618b3389c1fd1068a1ff58dc7b5b26` (has `model.safetensors`; HEAD ships only `pytorch_model.bin`) | `scripts/fetch-encoder.sh --embed-revision 50f9396f75618b3389c1fd1068a1ff58dc7b5b26` |
+| reranker | `BAAI/bge-reranker-v2-m3` | `953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e` | `scripts/fetch-encoder.sh --rerank-revision 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e` |
+
+The embedder + reranker must stay a **compatible pair** (`fetch-encoder.sh --list`); the
+currently-deployed embedder is the safetensors revision above (same weights as latest,
+faster load). Per-model detail lives in `models/{llm,embeddings,reranker}/MODEL.md`.
+
 ## Autostart & lifecycle
 
 ### What starts on boot
@@ -147,6 +164,20 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   auto-pick the fastest weight format, and are the ONE place download logic lives —
   `deploy.sh`'s venv phase calls them (no duplication). `lib-models.sh` is their
   shared helper (sourced, not run).
+
+**Activating a swapped model** — the fetch scripts only write `.env`; the units read
+it on (re)start. What you must do after a fetch depends on which model changed:
+- **LLM** (`fetch-llm.sh`) → `sudo systemctl restart ragfarm-llama`. Nothing else — the
+  LLM doesn't touch embeddings or the corpus. (If the model *alias* changed, also re-run
+  `infra/openwebui/setup_openwebui.py` so the OWUI preset points at it.)
+- **Reranker only** → `sudo systemctl restart ragfarm-reranker`. Query-time only; no re-ingest.
+- **Embedder** (`fetch-encoder.sh`) → the vector space changes, so you MUST re-embed:
+  `sudo systemctl restart ragfarm-embedder ragfarm-reranker` **then**
+  `.venv/bin/python services/ingester/ingester.py --recreate --corpus /data/corpus`
+  (or `scripts/deploy.sh --recreate-corpus`). **Skipping the re-ingest silently breaks
+  retrieval** — old stored vectors vs new query vectors. `scripts/stack.sh restart`
+  restarts every service but does **not** re-ingest; that step is always manual.
+  (`fetch-encoder.sh` prints this reminder when it actually re-fetched the embedder.)
 
 **Retrieval / RAG debugging**
 - `rag_pool_inspect.py` — dump the first-stage RRF candidate pool for a query

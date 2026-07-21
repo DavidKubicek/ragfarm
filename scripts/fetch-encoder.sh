@@ -82,11 +82,13 @@ EMBED_DIR="models/embeddings/$EMBED_SLUG"
 have_weights() { compgen -G "$EMBED_DIR/*.safetensors" >/dev/null || compgen -G "$EMBED_DIR/pytorch_model*.bin" >/dev/null; }
 if have_weights && [ "$FORCE" != 1 ]; then
 	ok "embedder already present: $EMBED_DIR"
+	EMBED_FETCHED=0
 else
 	info "fetching $EMBED_REPO${EMBED_REVISION:+@$EMBED_REVISION} -> $EMBED_DIR (latest, fastest weight format)"
 	mkdir -p "$EMBED_DIR"
 	hf_snapshot "$EMBED_REPO" "$EMBED_DIR" "$EMBED_REVISION" >/dev/null
 	have_weights || die "no weight file (safetensors/bin) landed in $EMBED_DIR"
+	EMBED_FETCHED=1
 fi
 env_upsert "$ENV_FILE" EMBED_MODEL_PATH "$REPO_ROOT/$EMBED_DIR"
 
@@ -110,4 +112,10 @@ env_upsert "$ENV_FILE" RERANK_GGUF_PATH "$REPO_ROOT/$RERANK_GGUF"
 
 ok "EMBED_MODEL_PATH=$REPO_ROOT/$EMBED_DIR"
 ok "RERANK_GGUF_PATH=$REPO_ROOT/$RERANK_GGUF   ($ENV_FILE)"
-info "restart to apply: sudo systemctl restart ragfarm-embedder ragfarm-reranker   (or scripts/stack.sh restart)"
+if [ "${EMBED_FETCHED:-0}" = 1 ]; then
+	warn "the EMBEDDER changed — the corpus MUST be re-embedded or hybrid retrieval breaks"
+	info "  1) restart:   sudo systemctl restart ragfarm-embedder ragfarm-reranker   (or scripts/stack.sh restart)"
+	info "  2) re-ingest: .venv/bin/python services/ingester/ingester.py --recreate --corpus \"\${CORPUS_PATH:-/data/corpus}\""
+else
+	info "restart to apply (reranker-only change): sudo systemctl restart ragfarm-reranker   (or scripts/stack.sh restart)"
+fi

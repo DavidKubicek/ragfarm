@@ -85,6 +85,15 @@ completion request returns a non-empty assistant message.
 ---
 
 ### 03 — embedder-service
+> **SUPERSEDED (2026-07-21):** the manual `snapshot_download` below (pinned revision +
+> `ignore_patterns=["pytorch_model.bin"]`) is superseded by `scripts/fetch-encoder.sh`,
+> which fetches the **latest** revision and auto-selects the fastest weight format. The
+> old **safetensors-only / no-pickle** constraint was a workaround for a pickle-RCE in the
+> very old torch of the abandoned NPU venv — **retired** now that we run torch 2.13+
+> (`weights_only` default). The pinned rev remains the known-good baseline: see
+> `docs/deployment.md` → "Tested model versions". The commands below are kept as the
+> historical record of how step 03 was originally done.
+
 Serve a multilingual embedder behind HTTP `/embed` on `:8090`. Ingestion (step 04)
 and retrieval (step 07) call it. **Runs on CPU, not the NPU** — see ADR-0002 for
 why the NPU path was abandoned for this corpus (mixed Czech + English; wide
