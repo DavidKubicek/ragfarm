@@ -1,4 +1,5 @@
 # ADR-0004 — Infra actuation via bounded MCP tools; composite-tool orchestration
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: ACCEPTED
 Date: 2026-07-09  (amended + accepted 2026-07-11)

@@ -1,4 +1,5 @@
 # ADR-0002: Embedding model runs on CPU (BGE-M3), not the NPU
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: Accepted (2026-06-15) — supersedes the original NPU/Quark decision below.
 

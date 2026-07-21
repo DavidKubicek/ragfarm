@@ -1,7 +1,8 @@
 # ADR-0005 — Naming, layout, port and collocation conventions
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: ACCEPTED  (conventions effective immediately; the one-time migration of
-existing files to match is the checklist at the end, executed on Dave's go-ahead)
+existing files to match is the checklist at the end, executed on David Kubicek's go-ahead)
 Date: 2026-07-11
 Builds on: ADR-0003 (durable layer = MCP servers behind mcpo + Open WebUI),
 ADR-0004 (confirm-gated actuation wrappers).
@@ -20,7 +21,7 @@ avoid.
 
 The operating principle, stated once so the rest of this ADR is just its mechanics:
 
-> **Easy to see, easy to read.** A newcomer (or Dave in six months) should be able
+> **Easy to see, easy to read.** A newcomer (or David Kubicek in six months) should be able
 > to infer every component's directory, container, unit, port and endpoint from its
 > one short name, and read the whole topology off a single table. Consistency is a
 > feature; a clever exception is a bug.
@@ -44,7 +45,7 @@ sound like they conflict but do not:
 > **Live inventory moved (2026-07-20, ADR-0008).** This ADR remains authoritative
 > for the *rules* — how every name/port/mount is derived from the short name (the
 > sections below). The *current running inventory* (which now includes the
-> reranker `/rerank` endpoint) is maintained in `docs/deployment.md`; treat that as
+> reranker service — now GPU llama.cpp on :8081) is maintained in `docs/deployment.md`; treat that as
 > the live registry and this table as the snapshot at this ADR's decision. The
 > naming rules a new component must follow are still governed here.
 
@@ -82,7 +83,7 @@ on-prem stack; see migration.
   No redundant segments: it is `mcp-placement`, never `mcp-infra-placement` — the
   `infra` is already supplied by the compose project prefix in the container name.
 - **Container name** = `infra-<service>` (project prefix + service). This is where
-  Dave's `infra-{rag,mcp}-<name>` shape comes from and it now holds uniformly:
+  David Kubicek's `infra-{rag,mcp}-<name>` shape comes from and it now holds uniformly:
   `infra-rag-retrieval`, `infra-mcp-placement`, `infra-mcp-host-control`,
   `infra-mcp-fs`.
 - **mcpo mount** = the short name, at `/<short>` on the single `:8000` endpoint
@@ -153,7 +154,7 @@ LAN-facing surface is open-webui:3000.
   *experimental* in the registry so its half-present state is intentional and visible
   rather than looking like a wiring bug.
 
-## Migration checklist (one coordinated commit, on Dave's go-ahead)
+## Migration checklist (one coordinated commit, on David Kubicek's go-ahead)
 
 Nothing below changes behaviour; it only makes names match the registry. Run from
 the repo root. `git mv` preserves history.

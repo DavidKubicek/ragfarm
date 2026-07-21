@@ -1,7 +1,8 @@
 # ADR-0001: Split the APU by role (iGPU=LLM, NPU=embeddings), not within one model
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: Accepted (2026-06-10)
-Context owner: Dave
+Context owner: David Kubicek
 
 ## Context
 The deployment target is an AMD Ryzen AI 9 HX 370 (Strix Point) on Ubuntu 24.04,

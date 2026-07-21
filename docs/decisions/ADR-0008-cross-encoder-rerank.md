@@ -1,4 +1,5 @@
 # ADR-0008 — Cross-encoder re-ranking replaces MMR in search_corpus
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: PENDING (reopened 2026-07-21; latency resolved the same day). The
 ranking-**quality** decision is validated and staying (the cross-encoder fixed the
@@ -185,6 +186,31 @@ Scores are byte-identical (llama.cpp raw logit → `sigmoid` == FlagReranker
 reranking needs `-b/-ub` ≥ the longest `(query,doc)` pair (unit sets 4096; default
 512 errors on long rows). This retires the CPU `/rerank` sub-endpoint on the embedder
 (embeddings-only again).
+
+### Reranker batch-size tuning (numbers + options)
+llama.cpp reranking scores each `(query, document)` pair as a **single sequence in one
+physical batch** (encoder, non-causal — not split token-by-token), so the physical
+batch `-ub` must be ≥ the longest pair, and the logical batch `-b` ≥ `-ub`. Defaults
+500'd us:
+
+- **Default `-ub 512`** → `input (543 tokens) is too large to process. increase the
+  physical batch size` on the first long candidate (a 189-word chunk + query ≈ 543 t).
+- **Unit sets `-b 4096 -ub 4096`** (`manifests/ragfarm-reranker.service`). Sizing:
+  prose chunks cap at the ingester's `CHUNK_MAX_WORDS=480` words (~600–700 tokens) and
+  table rows are shorter, so 4096 is ~6× the worst-case pair — safe against chunk drift.
+
+Options / trade-offs:
+- **Raise `-b/-ub`** if `CHUNK_MAX_WORDS` is ever increased (keep `-ub` above the
+  longest possible chunk+query). Cost is a bigger compute buffer — trivial on the
+  48 GB UMA for a 560 M encoder. `-ub` need not exceed `-c` (8192/slot default); 4096
+  sits comfortably under it.
+- **Truncate the rerank input** in `rag-retrieval._rerank` (send only the first N
+  tokens per candidate) to keep `-ub` small. *Rejected as default:* the old CPU
+  FlagReranker silently truncated to 512, whereas llama.cpp scoring the **full** text
+  is strictly better relevance — we prefer correctness to a smaller batch.
+- **Throughput vs latency:** a larger `-ub` also lets more pairs pack into one batch;
+  at 40 candidates the ~1.9 s figure already includes this. Trimming `RAG_CANDIDATES`
+  (40→20) remains the lever if latency ever needs to drop further.
 
 ### Hardware trajectory (out of scope for the decision; noted for the prod-HW plan)
 Much of the current pain — 7B tool-discipline flakiness, over-long answers, and this

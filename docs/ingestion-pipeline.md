@@ -1,4 +1,5 @@
 # Ingestion pipeline — mixed docx / xlsx / pdf corpus
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 This is the design reference for how `services/ingester/ingester.py` (+
 `xlsx_tables.py`, `corpus_manifest.py`) turns the corpus into Qdrant points. Those

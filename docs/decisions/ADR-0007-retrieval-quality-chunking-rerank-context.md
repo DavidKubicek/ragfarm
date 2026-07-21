@@ -1,4 +1,5 @@
 # ADR-0007 — Retrieval quality: section-aware chunking, hybrid+MMR rerank, client-side context management
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: ACCEPTED (2026-07-20). Section-aware chunking, broad-in/narrow-out
 retrieval, and client-side context management are validated on the corpus and

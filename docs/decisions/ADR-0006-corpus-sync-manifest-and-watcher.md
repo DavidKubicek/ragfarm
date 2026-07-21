@@ -1,4 +1,5 @@
 # ADR-0006 — Content-addressed corpus sync: SQLite manifest, alias switch, watcher
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: ACCEPTED
 Date: 2026-07-13

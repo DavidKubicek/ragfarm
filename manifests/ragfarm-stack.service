@@ -11,13 +11,15 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now ragfarm-stack.service
 #
-# The host services (ragfarm-llama, ragfarm-embedder) have their own units and
-# must be enabled separately; this stack tolerates them starting late (containers retry).
+# The host services (ragfarm-llama, ragfarm-reranker, ragfarm-embedder) have their
+# own units and must be enabled separately; this stack tolerates them starting late
+# (containers retry). ragfarm-reranker (GPU llama.cpp on :8081, ADR-0008) is ordered
+# here too so rag-retrieval's search_corpus has its reranker when it comes up.
 [Unit]
 Description=ragfarm container stack (qdrant, rag-retrieval, mcpo, open-webui)
 Requires=docker.service
-After=docker.service network-online.target ragfarm-llama.service ragfarm-embedder.service ragfarm-ingester-watcher.service
-Wants=network-online.target ragfarm-llama.service ragfarm-embedder.service ragfarm-ingester-watcher.service
+After=docker.service network-online.target ragfarm-llama.service ragfarm-reranker.service ragfarm-embedder.service ragfarm-ingester-watcher.service
+Wants=network-online.target ragfarm-llama.service ragfarm-reranker.service ragfarm-embedder.service ragfarm-ingester-watcher.service
 
 [Service]
 Type=oneshot

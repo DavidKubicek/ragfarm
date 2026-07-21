@@ -1,4 +1,5 @@
 # ADR-0003 — Open WebUI + mcpo as the agent/UI layer; retire custom agent.py
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: ACCEPTED
 Date: 2026-06-18

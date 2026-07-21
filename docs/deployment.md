@@ -1,4 +1,5 @@
 # Deployment & prod re-deployment notes
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 Operational facts captured during the PoC build (steps 02–07). ADR-0001/0003
 hold the *why*; this holds the concrete *what* needed to redeploy — especially the
@@ -65,6 +66,20 @@ to trusted networks** — it's the only externally reachable service.
   guarantees ordering + one control point (install steps in the unit header).
 
 ### Start / stop / status everything (host, as `dave`)
+
+**One command (recommended)** — `scripts/stack.sh` runs the whole ordered sequence
+and health-checks the result. Reach for this unless you're debugging one service:
+```bash
+scripts/stack.sh start      # host services → container stack → health check
+scripts/stack.sh stop       # container stack → host services (reverse order)
+scripts/stack.sh restart    # stop, then start
+scripts/stack.sh status     # systemd unit + container status at a glance
+scripts/stack.sh health     # probe every endpoint; non-zero exit if any is down
+```
+
+The explicit per-service sequence below does exactly the same thing — use it when you
+need to bring one piece up or down on its own.
+
 Cold start — host model hosts first, then the container stack:
 ```bash
 sudo systemctl start ragfarm-llama ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher
@@ -99,10 +114,20 @@ docker compose -f infra/compose.yaml ps
 Everything here runs from the repo root on the host as `dave`. Grouped by job.
 
 **Deploy & lifecycle**
+- `stack.sh` — the **one-command operator entry point**: `stack.sh {start|stop|
+  restart|status|health}`. Brings the whole stack (host `llama`/`reranker`/`embedder`/
+  `ingester-watcher` units + the container stack) up or down in the right order and
+  health-checks every endpoint. Use this for day-to-day start/stop; the per-service
+  systemd sequence is only for debugging one piece (see Autostart & lifecycle above).
 - `deploy.sh` — the reproducible, idempotent full deploy of the durable stack:
-  ordered phases, each ending in a machine-checkable gate; safe to re-run. Uses
-  `sudo` only for the specific systemd install/enable actions (never wraps the whole
-  script). The AI-out-of-the-loop path for repeatable deploys.
+  ordered phases (preflight → venv → host services → stack → corpus → watcher →
+  verify), each ending in a machine-checkable gate; safe to re-run. Uses `sudo` only
+  for the specific systemd install/enable actions (never wraps the whole script).
+  Picks a Python dependency profile — `--profile cpu` (default) or `cu12` — pinned in
+  `services/requirements.lock` / `requirements.cu12.lock` (identical package set;
+  only the torch wheel index differs, CPU vs CUDA 12.x). Builds the reranker GGUF if
+  absent and installs all host units incl. `ragfarm-reranker`. The AI-out-of-the-loop
+  path for repeatable deploys.
 - `mcpo-heal.sh` — waits until the MCP backends accept TCP, then restarts mcpo once
   so every tool mounts cleanly (works around the streamable-http boot race). Runs as
   the stack unit's `ExecStartPost`; run it by hand after any ad-hoc `rag-retrieval`

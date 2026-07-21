@@ -1,4 +1,5 @@
 # ragfarm — on-prem RAG + infra-control agent for AMD Ryzen AI 9 HX 370
+Author: David Kubicek (david.kubicek@eywo.cz)
 
 A fully on-prem retrieval-augmented assistant for a customer VM farm. It answers
 questions over thousands of internal documents/notes **and** lets infra admins

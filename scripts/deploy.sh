@@ -45,6 +45,10 @@ MODEL_REPO="${MODEL_REPO:-BAAI/bge-m3}"
 QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 EMBED_URL="${EMBED_URL:-http://127.0.0.1:8090}"
 LLM_URL="${LLM_URL:-http://127.0.0.1:8080}"
+RERANK_URL="${RERANK_URL:-http://127.0.0.1:8081}"      # dedicated GPU llama.cpp reranker (ADR-0008)
+LLAMA_DIR="${LLAMA_DIR:-$HOME/llama.cpp}"              # llama.cpp checkout (build/bin + convert_hf_to_gguf.py)
+RERANK_REPO="${RERANK_REPO:-BAAI/bge-reranker-v2-m3}"
+RERANK_GGUF="${RERANK_GGUF:-models/gguf/bge-reranker-v2-m3-f16.gguf}"  # gitignored build artifact
 MCPO_URL="${MCPO_URL:-http://127.0.0.1:8000}"
 OWUI_URL="${OWUI_URL:-http://127.0.0.1:3000}"
 ALIAS="${QDRANT_COLLECTION:-corpus}"            # retrieval targets this ALIAS (ADR-0006)
@@ -54,7 +58,7 @@ COMPOSE="docker compose -f infra/compose.yaml"
 MANIFESTS="manifests"
 SYSTEMD_DIR="/etc/systemd/system"
 # host-plane units (systemd) and the stack/watcher units, in the order they matter
-HOST_UNITS=(ragfarm-llama.service ragfarm-embedder.service)
+HOST_UNITS=(ragfarm-llama.service ragfarm-reranker.service ragfarm-embedder.service)
 STACK_UNIT="ragfarm-stack.service"
 WATCH_UNIT="ragfarm-ingester-watcher.service"
 
@@ -96,6 +100,27 @@ hf_download() {
 	local repo="$1" dst="$2"
 	if [ -x "$VENV/bin/hf" ]; then "$VENV/bin/hf" download "$repo" --local-dir "$dst"
 	else "$VENV/bin/huggingface-cli" download "$repo" --local-dir "$dst"; fi
+}
+
+# ensure the reranker GGUF exists (gitignored build artifact) by converting the
+# cached HF safetensors via llama.cpp's converter. Idempotent; safetensors-only.
+ensure_reranker_gguf() {
+	[ -f "$RERANK_GGUF" ] && { info "reranker GGUF present ($RERANK_GGUF)"; return; }
+	[ -f "$LLAMA_DIR/convert_hf_to_gguf.py" ] || die "llama.cpp converter missing at $LLAMA_DIR (build llama.cpp first, infra/llama/README.md)"
+	local snap
+	snap=$(ls -d "$HOME"/.cache/huggingface/hub/models--BAAI--bge-reranker-v2-m3/snapshots/*/ 2>/dev/null | head -1)
+	if [ -z "$snap" ]; then
+		info "fetching $RERANK_REPO (safetensors-only)"
+		snap=$("$VENV/bin/python" - "$RERANK_REPO" <<'PY'
+import sys
+from huggingface_hub import snapshot_download
+print(snapshot_download(sys.argv[1], ignore_patterns=["*.bin"]))
+PY
+)
+	fi
+	info "converting $snap -> $RERANK_GGUF (f16)"
+	"$VENV/bin/python" "$LLAMA_DIR/convert_hf_to_gguf.py" "$snap" --outfile "$RERANK_GGUF" --outtype f16 \
+		|| die "reranker GGUF conversion failed"
 }
 
 # install one systemd unit file from manifests/ and enable --now (idempotent)
@@ -147,17 +172,18 @@ phase_venv() {
 
 	# GATE
 	"$VENV/bin/python" - <<'PY' || die "venv import check failed"
-import torch, FlagEmbedding, fastapi, uvicorn, pydantic
+import torch, FlagEmbedding, fastapi, uvicorn, pydantic, gguf
 import qdrant_client, requests, openpyxl, docx, pdfplumber, langdetect, watchdog
-print("  torch", torch.__version__, "cuda?", torch.cuda.is_available())
+print("  torch", torch.__version__, "cuda?", torch.cuda.is_available(), "| gguf", gguf.__version__)
 PY
 	ls "$MODEL_DIR"/*.safetensors >/dev/null 2>&1 || die "no safetensors in $MODEL_DIR"
 	ok "venv ready; deps import; model present as safetensors"
 }
 
-# ---- 2. host services: llama + embedder on systemd (steps 02/03) -------------
+# ---- 2. host services: llama + reranker + embedder on systemd (steps 02/03/08) --
 phase_host_services() {
-	phase "host services (llama + embedder)"
+	phase "host services (llama + reranker + embedder)"
+	ensure_reranker_gguf                       # build the reranker GGUF before its unit starts
 	local u
 	for u in "${HOST_UNITS[@]}"; do install_unit "$u"; done
 	sudo systemctl daemon-reload
@@ -165,6 +191,19 @@ phase_host_services() {
 
 	# GATE
 	wait_http "$LLM_URL/v1/models" 120 || die "llama endpoint not answering ($LLM_URL)"
+	wait_http "$RERANK_URL/health" 90 || die "reranker endpoint not answering ($RERANK_URL)"
+	# reranker must SCORE and RANK: a relevant doc must outscore junk (proves the GPU
+	# cross-encoder is live, ADR-0008). Process substitution for the same stdin reason
+	# as the embedder gate below.
+	curl -s "$RERANK_URL/reranking" -H 'content-type: application/json' \
+		-d '{"query":"reboot the hypervisor host","documents":["drain and reboot the hypervisor host now","favourite pizza topping"]}' \
+	| "$VENV/bin/python" <(cat <<'PY'
+import sys, json
+d = json.load(sys.stdin); r = {x["index"]: x["relevance_score"] for x in d["results"]}
+assert r[0] > r[1], f"reranker mis-ranked relevant vs junk: {r}"
+print(f"  rerank ok: relevant {r[0]:+.2f} > junk {r[1]:+.2f}")
+PY
+	) || die "reranker gate failed"
 	# embedder must return NON-EMPTY sparse (same failure class as the TEI drop bug).
 	# Checker script comes via process substitution, NOT `python - <<EOF`: a heredoc
 	# on `python -` claims stdin as the PROGRAM source, so the piped curl JSON never
@@ -179,7 +218,7 @@ assert len(d["dense"][0]) == 1024 and len(s) > 0, "dense!=1024 or sparse empty"
 print(f"  dense_dim {len(d['dense'][0])}  sparse_terms {len(s)}")
 PY
 	) || die "embedder sparse gate failed"
-	ok "llama + embedder active; embedder returns dense(1024)+sparse"
+	ok "llama + reranker + embedder active; embedder returns dense(1024)+sparse"
 }
 
 # ---- 3. stack: container layer via ragfarm-stack.service (step 04/07) --------

@@ -7,7 +7,7 @@
 - IO: PCIe 4.0, USB4.
 
 ## TODO for the agent
-Record exact BIOS version + AGESA from Dave's BIOS screenshot here once available
+Record exact BIOS version + AGESA from David Kubicek's BIOS screenshot here once available
 (it was provided as an image in the originating chat; transcribe the version
 string and any relevant NPU/SMU toggles). Confirm in BIOS that the NPU is enabled
 and any "iGPU memory allocation"/UMA settings are set sanely for the 890M.
