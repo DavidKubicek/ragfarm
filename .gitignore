@@ -1,6 +1,8 @@
 .env
-models/gguf/*.gguf
-models/embeddings/*.onnx
+# model weights live under models/<kind>/<model-slug>/ — data only, fetched by
+# scripts/fetch-llm.sh / fetch-encoder.sh, never committed. MODEL.md files at
+# models/<kind>/MODEL.md (one level up) stay tracked as the record.
+models/*/*/
 __pycache__/
 *.pyc
 logs/

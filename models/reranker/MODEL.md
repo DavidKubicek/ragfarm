@@ -3,10 +3,10 @@
 | Field      | Value |
 |------------|-------|
 | Model      | BAAI/bge-reranker-v2-m3 |
-| Revision   | 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e |
+| Revision   | latest (not pinned; fetched by `scripts/fetch-encoder.sh`) |
 | Backend    | llama.cpp `--reranking`, **Vulkan / iGPU** (Radeon 890M, RADV GFX1150), f16 GGUF |
-| Weights    | models/gguf/bge-reranker-v2-m3-f16.gguf (~1.15 GB, gitignored — regenerate below) |
-| HF source  | ~/.cache/huggingface/hub/models--BAAI--bge-reranker-v2-m3 (safetensors, ~2.2 GB) |
+| Weights    | models/reranker/bge-reranker-v2-m3/bge-reranker-v2-m3-f16.gguf (~1.15 GB, gitignored); path in `.env` `RERANK_GGUF_PATH` |
+| HF source  | BAAI/bge-reranker-v2-m3 (latest) — downloaded + converted to GGUF by `scripts/fetch-encoder.sh` |
 | Output     | one relevance score per (query, document). llama.cpp returns the **raw logit**; rag-retrieval applies `sigmoid` → [0,1] (identical to FlagReranker `normalize=True`) |
 | Role       | cross-encoder rerank of the fused RRF candidate pool in `search_corpus` |
 | Languages  | 100+ incl. Czech and English (XLM-RoBERTa-large family, sibling of bge-m3) |
@@ -22,12 +22,10 @@ instance, so there is no first-party code and no `services/reranker/` directory:
 unit file is the whole deliverable. See ADR-0008.
 
 ## Regenerating the GGUF (weights are gitignored)
-From the cached HF safetensors (no re-download), via llama.cpp's converter:
+The download + f16 GGUF conversion live in the fetch script — one command:
 ```bash
-SNAP=$(ls -d ~/.cache/huggingface/hub/models--BAAI--bge-reranker-v2-m3/snapshots/*/ | head -1)
-.venv/bin/python ~/llama.cpp/convert_hf_to_gguf.py "$SNAP" \
-  --outfile models/gguf/bge-reranker-v2-m3-f16.gguf --outtype f16
+scripts/fetch-encoder.sh            # fetches bge-m3 + converts this reranker to GGUF
+scripts/fetch-encoder.sh --force    # re-fetch + re-convert
+scripts/fetch-encoder.sh --list     # other embedder+reranker pairs
 ```
-If the HF snapshot is absent, fetch it first (safetensors-only, per the standing
-no-pickle rule): `huggingface_hub.snapshot_download("BAAI/bge-reranker-v2-m3",
-ignore_patterns=["*.bin"])`.
+It writes `RERANK_GGUF_PATH` into `.env`, which `ragfarm-reranker.service` reads.

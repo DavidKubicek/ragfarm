@@ -136,6 +136,18 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   HuggingFace / `docker compose`); loads repo-root `.env` and normalizes
   `HTTP(S)_PROXY`/`NO_PROXY` (guarantees loopback + containers bypass the proxy).
 
+**Model management (fetch / hot-swap)**
+- `fetch-llm.sh` — fetch/swap the generative LLM GGUF into `models/llm/<slug>/` and
+  write `LLM_GGUF_PATH` to `.env` (the unit reads it). `--list` shows known-good
+  tool-calling LLMs; `--repo`/`--file` swap; `--force` re-fetch. Restart `ragfarm-llama`.
+- `fetch-encoder.sh` — fetch/swap the **matched** embedder+reranker pair into
+  `models/embeddings/<slug>/` and `models/reranker/<slug>/` (converts the reranker to
+  GGUF), writing `EMBED_MODEL_PATH` + `RERANK_GGUF_PATH` to `.env`. `--list` shows
+  compatible pairs. Restart `ragfarm-embedder ragfarm-reranker`. Both fetch latest,
+  auto-pick the fastest weight format, and are the ONE place download logic lives —
+  `deploy.sh`'s venv phase calls them (no duplication). `lib-models.sh` is their
+  shared helper (sourced, not run).
+
 **Retrieval / RAG debugging**
 - `rag_pool_inspect.py` — dump the first-stage RRF candidate pool for a query
   (`--branches` adds the dense-only and sparse-only lists). Separates a RANKING

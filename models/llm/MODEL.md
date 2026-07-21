@@ -4,7 +4,8 @@
 |------------|-------|
 | Model      | Qwen2.5-7B-Instruct |
 | Quant      | GGUF Q4_K_M (2 shards) |
-| Weights    | models/gguf/qwen2.5-7b-instruct-q4_k_m-0000{1,2}-of-00002.gguf (~4.7 GB, gitignored) |
+| Source     | Qwen/Qwen2.5-7B-Instruct-GGUF (latest) — fetched by `scripts/fetch-llm.sh`; path in `.env` `LLM_GGUF_PATH` |
+| Weights    | models/llm/qwen2.5-7b-instruct-gguf/qwen2.5-7b-instruct-q4_k_m-0000{1,2}-of-00002.gguf (~4.7 GB, gitignored) |
 | Backend    | llama.cpp `llama-server`, **Vulkan / iGPU** (Radeon 890M, RADV GFX1150) |
 | Context    | 32768 (`-c 32768`), `--context-shift`, `--keep 3072` |
 | Decoding   | greedy / deterministic: temp 0, top_k 1, top_p/min_p 0, seed 42 |

@@ -5,19 +5,22 @@
 # embedder (~36 s/query on CPU -> ~1.7 s on the iGPU). No ROCm (gfx1150 unofficial);
 # Vulkan, exactly like the LLM.
 #
-# The GGUF is generated (not committed; gitignored like the LLM) from the cached HF
-# weights — see models/reranker/MODEL.md for the one-liner.
+# The GGUF is generated (not committed; gitignored) by `scripts/fetch-encoder.sh`
+# from the cached HF weights — see models/reranker/MODEL.md.
 [Unit]
 Description=llama.cpp reranker (bge-reranker-v2-m3, Vulkan/iGPU)
 After=network-online.target
 
 [Service]
 User=dave
-# Optional repo-root .env (proxy vars etc.); leading `-` => no failure if absent.
+# RERANK_GGUF_PATH default matches `scripts/fetch-encoder.sh`'s default fetch
+# target; EnvironmentFile is loaded AFTER so a value in .env (written by
+# fetch-encoder.sh when you swap models, or by hand) OVERRIDES this default.
+Environment=RERANK_GGUF_PATH=/home/dave/ragfarm/models/reranker/bge-reranker-v2-m3/bge-reranker-v2-m3-f16.gguf
 EnvironmentFile=-/home/dave/ragfarm/.env
 WorkingDirectory=/home/dave/llama.cpp
 ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
-  -m /home/dave/ragfarm/models/gguf/bge-reranker-v2-m3-f16.gguf \
+  -m ${RERANK_GGUF_PATH} \
   --reranking --host 127.0.0.1 --port 8081 -ngl 999 --mlock --mmap \
   -b 4096 -ub 4096 \
   --alias bge-reranker-v2-m3
