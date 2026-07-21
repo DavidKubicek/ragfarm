@@ -1,0 +1,31 @@
+# /etc/systemd/system/ragfarm-reranker.service  (runs on HOST, needs iGPU)
+# Second llama.cpp server, dedicated to reranking: bge-reranker-v2-m3 as a GGUF on
+# the iGPU via Vulkan (ADR-0008). Same binary as ragfarm-llama, different model and
+# the --reranking endpoint. Replaces the old CPU cross-encoder that ran inside the
+# embedder (~36 s/query on CPU -> ~1.7 s on the iGPU). No ROCm (gfx1150 unofficial);
+# Vulkan, exactly like the LLM.
+#
+# The GGUF is generated (not committed; gitignored like the LLM) from the cached HF
+# weights — see models/reranker/MODEL.md for the one-liner.
+[Unit]
+Description=llama.cpp reranker (bge-reranker-v2-m3, Vulkan/iGPU)
+After=network-online.target
+
+[Service]
+User=dave
+# Optional repo-root .env (proxy vars etc.); leading `-` => no failure if absent.
+EnvironmentFile=-/home/dave/ragfarm/.env
+WorkingDirectory=/home/dave/llama.cpp
+ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
+  -m /home/dave/ragfarm/models/gguf/bge-reranker-v2-m3-f16.gguf \
+  --reranking --host 127.0.0.1 --port 8081 -ngl 999 --mlock --mmap \
+  -b 4096 -ub 4096 \
+  --alias bge-reranker-v2-m3
+# -b/-ub 4096: reranking scores each (query,doc) pair in ONE physical batch, so the
+# batch must exceed the longest pair. Default 512 < our ~480-word chunks (~600-700
+# tokens); 4096 gives ample headroom. (The old CPU FlagReranker silently truncated
+# to 512 instead — llama.cpp scores the full text, which is strictly better.)
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

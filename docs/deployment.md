@@ -19,7 +19,7 @@ open-webui.
 |-------|-----------|-----------|------------------------------|------|-----------|----------------------|---------|
 | host | llama | built at `~/llama.cpp` | — (systemd `ragfarm-llama`) | `127.0.0.1:8080` | — | OpenAI base URL (swappable) | no |
 | host | embedder | `services/embedder` | — (systemd `ragfarm-embedder`) | `127.0.0.1:8090` `/embed` | — | internal — dense+sparse embed | no |
-| host | reranker | `services/embedder` (same process) | — (systemd `ragfarm-embedder`) | `127.0.0.1:8090` `/rerank` | — | internal — bge-reranker-v2-m3, lazy-loaded (ADR-0008) | no |
+| host | reranker | (built at `~/llama.cpp`) | — (systemd `ragfarm-reranker`) | `127.0.0.1:8081` `/reranking` | — | internal — bge-reranker-v2-m3 GGUF, **iGPU/Vulkan** (ADR-0008) | no |
 | host | ingester (+ watcher) | `services/ingester` | — (systemd `ragfarm-ingester-watcher`) | — | — | batch + autonomous incremental sync (ADR-0006) | writes Qdrant |
 | container | qdrant | upstream image | `qdrant` / `infra-qdrant` | `127.0.0.1:6333/6334` | — | retrieval store; volume `qdrant_data` | no |
 | container | rag | `services/rag-retrieval` | `rag-retrieval` / `infra-rag-retrieval` | `127.0.0.1:8104` | `/rag` | **tool server** — `search_corpus` | no |
@@ -31,9 +31,11 @@ open-webui.
 
 `ragfarm-stack.service` launches the container plane **except `mcp-fs`** (unbridged)
 and **except the ingester** (a host job / the watcher unit, not the stack): qdrant,
-rag-retrieval, mcp-placement, mcp-host-control, mcpo, open-webui. The reranker is
-not a separate process or port — it is a second endpoint on the embedder host,
-co-located per ADR-0008 so retrieval stays one CPU model host.
+rag-retrieval, mcp-placement, mcp-host-control, mcpo, open-webui. The reranker is a
+**second host `llama-server`** on the iGPU (`:8081 --reranking`, ADR-0008) — a
+Vulkan sibling of the LLM, not an embedder endpoint; the embedder is embeddings-only.
+So there are **two `llama-server` processes**: the LLM (`:8080`) and the reranker
+(`:8081`), both on the iGPU.
 
 ### Why host networking (load-bearing PoC fact)
 The LLM (`:8080`) and embedder (`:8090`) are host processes bound to **127.0.0.1
@@ -52,9 +54,10 @@ to trusted networks** — it's the only externally reachable service.
 ## Autostart & lifecycle
 
 ### What starts on boot
-- **Host services** (systemd, already `enabled`): `ragfarm-llama.service`,
-  `ragfarm-embedder.service`, `ragfarm-ingester-watcher.service` (autonomous corpus
-  sync, ADR-0006).
+- **Host services** (systemd, already `enabled`): `ragfarm-llama.service` (LLM),
+  `ragfarm-reranker.service` (iGPU cross-encoder, ADR-0008),
+  `ragfarm-embedder.service` (CPU embeddings),
+  `ragfarm-ingester-watcher.service` (autonomous corpus sync, ADR-0006).
 - **Container stack**: `ragfarm-stack.service` runs `docker compose up -d` for the
   six container services (see the topology note above), then its `ExecStartPost`
   runs `scripts/mcpo-heal.sh`. Containers also carry `restart: unless-stopped` and
@@ -64,17 +67,17 @@ to trusted networks** — it's the only externally reachable service.
 ### Start / stop / status everything (host, as `dave`)
 Cold start — host model hosts first, then the container stack:
 ```bash
-sudo systemctl start ragfarm-llama ragfarm-embedder ragfarm-ingester-watcher
+sudo systemctl start ragfarm-llama ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher
 sudo systemctl start ragfarm-stack
 ```
 Stop everything — stack first, then host services:
 ```bash
 sudo systemctl stop ragfarm-stack
-sudo systemctl stop ragfarm-ingester-watcher ragfarm-embedder ragfarm-llama
+sudo systemctl stop ragfarm-ingester-watcher ragfarm-embedder ragfarm-reranker ragfarm-llama
 ```
 Status at a glance:
 ```bash
-systemctl --no-pager status ragfarm-llama ragfarm-embedder ragfarm-ingester-watcher ragfarm-stack
+systemctl --no-pager status ragfarm-llama ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher ragfarm-stack
 docker compose -f infra/compose.yaml ps
 ```
 
@@ -83,8 +86,12 @@ docker compose -f infra/compose.yaml ps
   follow with `scripts/mcpo-heal.sh` (or just `sudo systemctl restart ragfarm-stack`),
   otherwise tools come up unmounted (ADR-0007 note #4; the boot healer is the stack
   unit's `ExecStartPost`).
-- **embedder**: a restart drops the lazy-loaded reranker; it reloads (~15–20 s) on
-  the next `/rerank` call. `/embed` is ready as soon as `/health` responds.
+- **reranker & embedder**: independent host services now (a GPU `llama-server` on
+  `:8081` and the CPU embedder on `:8090`); restarting one doesn't touch the other.
+  The reranker loads its ~1.2 GB GGUF on the iGPU in ~1–2 s; rag-retrieval reaches it
+  via `RERANK_ENDPOINT` (`:8081/reranking`). One gotcha: llama.cpp reranking scores
+  each `(query,doc)` pair in one physical batch, so the unit sets `-b/-ub 4096` — if
+  chunks ever grow past that, raise it (see `ragfarm-reranker.service`).
 - Manual `docker compose` ops need the proxy env first: `source scripts/proxy-env.sh`
   (image pulls + container proxy inheritance).
 
@@ -186,10 +193,12 @@ Qdrant) is HW-agnostic and should NOT be re-architected. Concrete changes:
   ADR-0008/agent.py), verbose rambling answers, and instruction-following — and brings
   a larger native context. Tensor-parallel across two GPUs buys still-larger context /
   throughput if needed. Nothing in the durable layer changes (ADR-0003).
-- **Embedder + reranker**: BGE-M3 (`/embed`) and bge-reranker-v2-m3 (`/rerank`, ADR-0008)
-  both move onto the GPU (CUDA); keep the `/embed` dense+sparse and `/rerank`
-  contracts on `:8090`. Re-ingest is unnecessary if the embedder model+revision are
-  unchanged (the reranker touches query time only, so it never requires re-ingest).
+- **Embedder**: BGE-M3 (`/embed`, currently CPU) moves onto the GPU (CUDA); keep the
+  dense+sparse contract on `:8090`. Re-ingest is unnecessary if model+revision are unchanged.
+- **Reranker**: already GPU-accelerated on the iGPU via llama.cpp/Vulkan
+  (`:8081 --reranking`, ADR-0008). On prod it swaps the Vulkan build for a CUDA one (or
+  is served by the same CUDA inference stack); the `/reranking` contract is unchanged.
+  Query-time only — never requires re-ingest.
 - **Networking**: with a single CUDA stack and services able to bind a shared
   interface, the host-networking workaround can be dropped — move containers back to
   a compose bridge network and reach inference/embedder via service DNS or

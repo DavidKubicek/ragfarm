@@ -50,7 +50,7 @@ from mcp.server.fastmcp import FastMCP
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 EMBED      = os.environ.get("EMBED_ENDPOINT", "http://localhost:8090/embed")
-RERANK_EP  = os.environ.get("RERANK_ENDPOINT", "http://localhost:8090/rerank")  # cross-encoder on the embedder host
+RERANK_EP  = os.environ.get("RERANK_ENDPOINT", "http://localhost:8081/reranking")  # dedicated GPU llama.cpp reranker (ADR-0008)
 COLL       = os.environ.get("QDRANT_COLLECTION", "corpus")
 HOST       = os.environ.get("RAG_HOST", "0.0.0.0")
 PORT       = int(os.environ.get("RAG_PORT", "8104"))
@@ -86,19 +86,25 @@ def _embed_query(text: str) -> tuple[list[float], qm.SparseVector]:
 # --- cross-encoder re-rank (default path) ------------------------------------
 def _rerank(query: str, cands: list, k: int, min_score: float) -> list[tuple]:
     """Score every (query, chunk) pair with the cross-encoder (bge-reranker-v2-m3,
-    served by the embedder host at /rerank), sort by that normalized relevance,
-    drop anything below `min_score`, and return the top k as (point, score)
-    tuples. Unlike MMR there is no diversity term, so N distinct records that
-    share a template (e.g. contact rows) all keep their true scores instead of
-    being suppressed as 'redundant'. The model runs on the embedder service
-    (ADR-0008); this file still owns the ranking POLICY (pool, sort, floor, k)."""
+    served by the dedicated GPU llama.cpp reranker at RERANK_ENDPOINT, ADR-0008),
+    sort by relevance, drop anything below `min_score`, and return the top k as
+    (point, score) tuples. Unlike MMR there is no diversity term, so N distinct
+    records that share a template (e.g. contact rows) all keep their true scores
+    instead of being suppressed as 'redundant'. Only pair-scoring is delegated to
+    the reranker service; this file still owns the ranking POLICY (pool, sort,
+    floor, k)."""
     if not cands or k <= 0:
         return []
     docs = [(p.payload or {}).get("text_clean") or (p.payload or {}).get("text") or ""
             for p in cands]
-    r = requests.post(RERANK_EP, json={"query": query, "documents": docs, "normalize": True}, timeout=120)
+    r = requests.post(RERANK_EP, json={"query": query, "documents": docs}, timeout=120)
     r.raise_for_status()
-    scores = r.json()["scores"]
+    # llama.cpp returns [{"index": i, "relevance_score": <raw logit>}, ...]. Sigmoid
+    # the logit to the [0,1] contract (identical to FlagReranker normalize=True) and
+    # realign to input order so scores[i] belongs to cands[i].
+    scores = [0.0] * len(cands)
+    for item in r.json()["results"]:
+        scores[item["index"]] = 1.0 / (1.0 + math.exp(-float(item["relevance_score"])))
     ranked = sorted(zip(cands, scores), key=lambda t: t[1], reverse=True)
     out = [(p, float(s)) for p, s in ranked if s >= min_score]
     return out[:k]

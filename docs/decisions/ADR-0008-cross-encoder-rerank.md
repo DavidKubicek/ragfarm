@@ -1,11 +1,13 @@
 # ADR-0008 — Cross-encoder re-ranking replaces MMR in search_corpus
 
-Status: PENDING (reopened 2026-07-21). The ranking-**quality** decision is validated
-and staying — the cross-encoder fixed the MMR failure (see Validation). What is NOT
-settled is its **latency cost**: the CPU rerank was measured at **~36 s per query**,
-not the ~1–2 s first estimated. This ADR stays open until a mitigation is chosen and
-re-measured; findings accumulate in "Measured latency" below.
-Date: 2026-07-20 (reopened 2026-07-21)
+Status: PENDING (reopened 2026-07-21; latency resolved the same day). The
+ranking-**quality** decision is validated and staying (the cross-encoder fixed the
+MMR failure). The **latency** blocker that reopened this — ~36 s CPU rerank — is
+**resolved**: the reranker moved to its own GPU `llama-server --reranking` on the
+Vulkan iGPU (**~36 s → ~1.9 s**, see "Measured latency" → Resolution, and the
+Architecture section). Still open, hence PENDING: `RAG_MIN_SCORE` calibration on
+accumulated dumps. Promote to ACCEPTED once that lands.
+Date: 2026-07-20 (reopened + latency resolved 2026-07-21)
 Builds on: ADR-0002 (BGE-M3 dense+sparse embedder, CPU model host on :8090),
 ADR-0003 (rag-retrieval owns corpus RAG in the MCP layer), ADR-0007 (section-aware
 chunking + broad-in/narrow-out retrieval; this ADR supersedes its §2 **MMR** step).
@@ -58,30 +60,32 @@ Why a cross-encoder is the right instrument here:
    are always sorted by the number shown — fixing the ADR-0007 defect where the
    printed RRF score disagreed with the post-MMR order.
 
-### Architecture — the model runs on the embedder host, policy stays in rag-retrieval
+### Architecture — a dedicated GPU reranker; policy stays in rag-retrieval
 
 Per ADR-0007's scope, all ranking **policy** (pool size, sort, floor, `k`, the
-rerank-vs-MMR switch) lives in `rag-retrieval/server.py`. Only the **model
-inference** is delegated: the cross-encoder executes behind a new
-`POST :8090/rerank` on the existing embedder service, which rag-retrieval calls
-over HTTP exactly as it already calls `/embed`. This is symmetric with how
-embedding already works and was chosen over loading the model in the rag-retrieval
-process because:
+rerank-vs-MMR switch) lives in `rag-retrieval/server.py`. Only **pair-scoring** is
+delegated to a reranker service, called over HTTP.
 
-- `rag-retrieval` is a slim `python:3.12-slim` container (mcp/qdrant-client/
-  requests, no torch). In-process reranking would add ~2 GB of torch+FlagEmbedding
-  to that image and load a 2.3 GB model **inside the container**.
-- ADR-0007 note #4: every `rag-retrieval` restart forces an mcpo heal cycle. Loading
-  a 2.3 GB model on each such restart would add ~15–20 s to every heal. Keeping
-  rag-retrieval thin keeps restarts fast.
-- The embedder service **already is** the host-side CPU BGE model host (FlagEmbedding
-  + torch, model in the HF cache, rarely restarted) — the natural home for a sibling
-  BGE model. The reranker is **lazy-loaded on first `/rerank` call**, so it costs no
-  RAM or startup time until retrieval actually uses it.
+**The reranker is a dedicated `llama-server --reranking` on the iGPU** (`:8081`,
+Vulkan) — the same engine and device as the LLM (`manifests/ragfarm-reranker.service`,
+`models/reranker/MODEL.md`). rag-retrieval POSTs candidate texts to `RERANK_ENDPOINT`
+(`:8081/reranking`); llama.cpp returns a **raw logit** per pair, which rag-retrieval
+`sigmoid`s to the [0,1] score contract (byte-identical to the earlier FlagReranker
+`normalize=True`). The GGUF (`models/gguf/bge-reranker-v2-m3-f16.gguf`, gitignored) is
+converted from the cached HF safetensors via `convert_hf_to_gguf.py`.
 
-`bge-reranker-v2-m3` is pinned safetensors-only (downloaded with `ignore_patterns=
-["*.bin"]`, per the standing no-pickle rule) and recorded in
-`models/embeddings/MODEL.md`.
+**Superseded design (2026-07-20 → 2026-07-21).** The reranker was first co-hosted as a
+`POST :8090/rerank` sub-endpoint on the CPU embedder service (FlagReranker, torch), to
+reuse the existing CPU model host and keep rag-retrieval thin. Correct on the "avoid
+container bloat / avoid ROCm" axis, but **wrong on latency** — the CPU cross-encoder
+took ~36 s/query. Moving it to llama.cpp's native `--reranking` on the **Vulkan iGPU**
+(no ROCm — gfx1150 is unofficial per ADR-0001; no torch) cut that to ~1.9 s on VRAM
+the 7B leaves idle. The embedder and reranker now share nothing (different model,
+device, purpose), so the embedder is embeddings-only again, and the reranker record
+moved to `models/reranker/MODEL.md`. A reranker is a single-pass encoder, so there is
+no autoregressive KV cache to share between the two `llama-server` processes (and
+caches are model-specific regardless) — a second process is the right shape, not a
+compromise.
 
 ## Validation
 
@@ -108,13 +112,16 @@ Positive:
 - "List all X" queries work: distinct same-template records are no longer suppressed.
 - Ranking reflects true query–document relevance, in Czech and English.
 - Returned `score` is meaningful and consistent with order.
-- No container bloat; rag-retrieval restarts stay fast; one CPU model host.
+- No container bloat; rag-retrieval stays a thin HTTP client; the reranker is a
+  dedicated GPU `llama-server` sharing the iGPU/VRAM the LLM leaves idle.
+- **~36 s → ~1.9 s** per query once the cross-encoder moved to the Vulkan iGPU.
 
 Negative / cost:
-- The embedder host holds a second ~2.3 GB model once `/rerank` is first hit.
-- One extra HTTP round-trip and a cross-encoder forward pass over ~40 candidates per
-  query. **First estimated at ~1–2 s CPU; MEASURED at ~36 s** (see "Measured
-  latency"). This is the open cost that keeps the ADR PENDING.
+- A second `llama-server` process (~1.2 GB VRAM for the reranker GGUF) and one extra
+  HTTP round-trip per query. The GGUF is a build artifact (gitignored; regenerate via
+  `convert_hf_to_gguf.py`, see `models/reranker/MODEL.md`).
+- llama.cpp reranking scores each pair in one physical batch, so the unit must set
+  `-b/-ub` above the longest chunk (currently 4096; the default 512 500s on long rows).
 
 Neutral / open:
 - `RAG_MIN_SCORE` is 0.0 (off) pending calibration on accumulated result dumps.
@@ -156,9 +163,28 @@ essentially every RAG query, but it is orthogonal to the real problem — low pr
    starving llama-server (idle vs under-load varied ~10 s → 36–50 s).
 4. **ONNX int8 quantization** of the cross-encoder on CPU — typically 2–4× faster;
    the biggest CPU-only win, at the cost of a ranking-quality re-check.
-5. **GPU rerank** — the real fix, but hardware-gated: cheap on prod NVIDIA, a genuine
-   bother on the current AMD iGPU (Vulkan-only per ADR-0001; ROCm on gfx1150 is
-   unofficial; the iGPU is already saturated by the 7B LLM). Deferred to prod HW.
+5. **GPU rerank via llama.cpp/Vulkan — CHOSEN (2026-07-21).** Not ROCm/torch (that
+   *would* be a bother on gfx1150), but llama.cpp's native `--reranking` running the
+   GGUF on the **Vulkan iGPU** — same engine as the LLM, no ROCm — on VRAM the 7B
+   leaves idle. ~36 s → ~1.9 s. See Resolution below. (Mitigations 1–4 remain
+   available for further trimming but are no longer needed for acceptable latency.)
+
+### Resolution (2026-07-21) — GPU reranker on the iGPU
+Converted `bge-reranker-v2-m3` to an f16 GGUF (`convert_hf_to_gguf.py`, from the
+cached HF weights) and served it from a dedicated `llama-server --reranking` on the
+iGPU (Vulkan, `:8081`; `manifests/ragfarm-reranker.service`). Measured end-to-end
+through mcpo → rag-retrieval → `:8081`:
+
+| stage | CPU (embedder sub-endpoint) | GPU (iGPU/Vulkan) |
+|-------|-----------------------------|-------------------|
+| rerank (40 candidates) | ~36 s | **~1.9 s** |
+
+Scores are byte-identical (llama.cpp raw logit → `sigmoid` == FlagReranker
+`normalize=True`; e.g. Marek Česal 0.9491 both ways), so ranking, the returned
+`score`, and `RAG_MIN_SCORE` semantics are unchanged. Operational note: llama.cpp
+reranking needs `-b/-ub` ≥ the longest `(query,doc)` pair (unit sets 4096; default
+512 errors on long rows). This retires the CPU `/rerank` sub-endpoint on the embedder
+(embeddings-only again).
 
 ### Hardware trajectory (out of scope for the decision; noted for the prod-HW plan)
 Much of the current pain — 7B tool-discipline flakiness, over-long answers, and this

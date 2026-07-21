@@ -166,7 +166,8 @@ against.
   Pure dense retrieval is unreliable for identifiers; sparse fixes it — which is why
   `text_clean` deliberately keeps URL/host tokens.
 - `search_corpus` (rag-retrieval) fuses both with RRF over a broad candidate pool,
-  then re-ranks with a cross-encoder (ADR-0008), so one tool call serves both "which
+  then re-ranks with a GPU cross-encoder (bge-reranker-v2-m3 via a dedicated
+  llama.cpp/Vulkan server on `:8081`, ADR-0008), so one tool call serves both "which
   VLAN is host X on" (lexical) and "how do we handle host maintenance" (semantic,
   either language).
 
