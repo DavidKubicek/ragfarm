@@ -77,6 +77,12 @@ measured numbers that justify it.
 -  tests/ - reference documents with the worst culture we could find (for fine-tuning parsing, chunking, RAG)
 -  scripts/ - helper tools for managing `ragfarm`, debug tools, tracing & timing tools for LLM benching
 
+## Diagrams
+
+![Architecture Diagram](./assets/ragfarm_runtime_component_inventory.png)
+
+![Architecture Diagram](./assets/ragfarm_query_time_retrieval_path.png)
+
 ## Network / proxy
 Outbound build traffic (PyPI, HuggingFace, container builds) honors a proxy via
 repo-root `.env` (gitignored, host-only — copy `.env.example`). Set `HTTP_PROXY`,
