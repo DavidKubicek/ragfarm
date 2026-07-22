@@ -154,14 +154,26 @@ def _row_is_data(wsv, ri, anchors) -> bool:
                for ci in anchors)
 
 
-def _last_data_row(wsv, anchors, hdr_bottom, end) -> int:
+def _last_data_row(wsv, anchors, hdr_bottom, end, cmax=None) -> int:
     """Highest row in (hdr_bottom, end] whose identity cols are populated. Rows
     below it are trailing totals/notes -> excluded. Interior gaps are preserved
-    because we trim from the BOTTOM only."""
+    because we trim from the BOTTOM only.
+
+    Fallback (when cmax is given): if the header-NAME anchors match NO data row at
+    all — e.g. the identity columns are headed 'Network Address(es)' / 'Network
+    Name(s)' rather than 'IP'/'FQDN', so _anchor_cols fell back to an empty leftmost
+    column — re-detect the last data row by CONTENT (an IP/FQDN token in any cell,
+    via _row_has_identity_token). This fires ONLY when the name-based scan found
+    ZERO rows, so it can never shrink a table that already parsed; it only rescues
+    one that would otherwise be trimmed to nothing (see the EPC FW-rules fixture)."""
     last = hdr_bottom
     for rr in range(hdr_bottom + 1, end + 1):
         if _row_is_data(wsv, rr, anchors):
             last = rr
+    if last == hdr_bottom and cmax is not None:
+        for rr in range(hdr_bottom + 1, end + 1):
+            if _row_has_identity_token(wsv, rr, cmax):
+                last = rr
     return last
 
 
@@ -533,7 +545,9 @@ def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnu
     band_label = next(iter(_merged_bands_single(wss, header_ri).values()), None)
     keys, c2 = _reuse_trailing_cols(wsv, keys, c2, header_ri, end, band_label, prev_single)
     anchors = _anchor_cols(keys)
-    data_end = _last_data_row(wsv, anchors, header_ri, end)
+    data_end = _last_data_row(wsv, anchors, header_ri, end, cmax)
+    # see _emit_multi: content fallback for the per-row test when name-anchors are empty.
+    anchored = any(_row_is_data(wsv, rr, anchors) for rr in range(header_ri + 1, data_end + 1))
     ff_cols = _ff_candidate_cols(wsv, wss, keys, header_ri, data_end)
     vm = _vmerge_map(wss, c1, c2, header_ri + 1, data_end)
     log.info("%s[%s] t#%d SINGLE hdr R%d span=%d..%d cols=%d anchors=%s ff=%d vm=%s rows=%d trim=%d",
@@ -564,7 +578,7 @@ def _emit_single(wsv, wss, sheet, cmax, source_file, region_top, region_end, tnu
                 carry[ci] = v
             elif ci in carry:
                 values[ci] = carry[ci]
-        if not _row_is_data(wsv, rr, anchors):
+        if not (_row_is_data(wsv, rr, anchors) if anchored else _row_has_identity_token(wsv, rr, cmax)):
             # interior non-data row: keep only if it set a carry (grouping label)
             if not any(ci in ff_cols for ci in _row_nonempty_cols(wsv, rr, cmax)):
                 continue
@@ -628,7 +642,12 @@ def _emit_multi(wsv, wss, sheet, cmax, source_file, region_top, tnum, prev, repo
         c1 = new_c1
 
     anchors = _anchor_cols(keys)
-    data_end = _last_data_row(wsv, anchors, bottom, end)
+    data_end = _last_data_row(wsv, anchors, bottom, end, cmax)
+    # If the header-NAME anchors populate no row, this table's identity columns
+    # aren't name-detectable -> use CONTENT (IP/FQDN) for the per-row data test too
+    # (mirrors the _last_data_row fallback), so the kept rows actually emit. True for
+    # every name-anchored table (all existing fixtures) -> behaviour unchanged there.
+    anchored = any(_row_is_data(wsv, rr, anchors) for rr in range(bottom + 1, data_end + 1))
     vm = _vmerge_map(wss, c1, c2, bottom + 1, data_end)
     log.info("%s[%s] t#%d MULTI title=%r hdr R%d-%d span=%d..%d cols=%d reuse=%s synth=%s anchors=%s vm=%s rows=%d trim=%d",
              source_file, sheet, tnum, title, top, bottom, c1, c2, len(keys),
@@ -651,7 +670,7 @@ def _emit_multi(wsv, wss, sheet, cmax, source_file, region_top, tnum, prev, repo
                 cur = values.get(ci)
                 if cur is None or str(cur).strip() == "":
                     values[ci] = vm[ci][rr]
-        if not _row_is_data(wsv, rr, anchors):
+        if not (_row_is_data(wsv, rr, anchors) if anchored else _row_has_identity_token(wsv, rr, cmax)):
             continue
         ridx += 1
         text = _serialize_kv(keys, values, sheet)

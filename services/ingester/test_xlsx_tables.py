@@ -30,6 +30,7 @@ logging.disable(logging.INFO)
 FIXTURES = pathlib.Path(os.environ.get("FIXTURES", "tests/fixtures"))
 EPC = FIXTURES / "EPC25_VMs_config.xlsx"
 SA  = FIXTURES / "SA_Hosting_infra_VMs.xlsx"
+FW  = FIXTURES / "EPC25-FW-rules-EPC-20260713-DB_ENDUR.xlsx"
 
 # trailing content that must NEVER appear as a record
 JUNK_MARKERS = ["Notes:", "notes:", "pravdepodobne", "Oddělená síť",
@@ -38,6 +39,9 @@ JUNK_MARKERS = ["Notes:", "notes:", "pravdepodobne", "Oddělená síť",
 EXPECT_EPC = {"New DC": 33, "Old DC": 21, "Stacked": 13, "Plain": 4}
 EXPECT_SA_TOTAL = 41
 EXPECT_SA_GROUPS = 13
+# FW-rules: identity cols headed "Network Address(es)"/"Network Name(s)" (not "IP"/"FQDN"),
+# so header-name anchors fail -> content fallback must keep all 10 rule rows (was 0).
+EXPECT_FW_TOTAL = 10
 
 
 def _by_sheet(recs):
@@ -50,13 +54,14 @@ def _by_sheet(recs):
 def run():
     failures = []
 
-    if not EPC.exists() or not SA.exists():
+    if not EPC.exists() or not SA.exists() or not FW.exists():
         print(f"FIXTURES missing under {FIXTURES} "
-              f"(EPC={EPC.exists()}, SA={SA.exists()})")
+              f"(EPC={EPC.exists()}, SA={SA.exists()}, FW={FW.exists()})")
         return 1
 
     epc = list(xt.iter_xlsx(EPC))
     sa = list(xt.iter_xlsx(SA))
+    fw = list(xt.iter_xlsx(FW))
 
     # 1. EPC25 per-sheet counts
     bs = _by_sheet(epc)
@@ -111,6 +116,16 @@ def run():
     print(f"[{'PASS' if ok else 'FAIL'}] Plain bare-value join, identifiers verbatim")
     if not ok:
         failures.append("Plain bare-join failed")
+
+    # 7. FW-rules: content fallback keeps all rows (identity cols not name-detectable)
+    ok = len(fw) == EXPECT_FW_TOTAL
+    print(f"[{'PASS' if ok else 'FAIL'}] EPC FW-rules/List1: {len(fw)} (want {EXPECT_FW_TOTAL})")
+    if not ok:
+        failures.append(f"FW total {len(fw)}!={EXPECT_FW_TOTAL}")
+    okh = sum("leadb229p.lea.piz" in r["text"] for r in fw)
+    print(f"[{'PASS' if okh >= 1 else 'FAIL'}] FW host round-trip: leadb229p.lea.piz in {okh} rows")
+    if okh < 1:
+        failures.append("FW host round-trip failed")
 
     print()
     if failures:
