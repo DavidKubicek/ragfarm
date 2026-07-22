@@ -497,6 +497,21 @@ def live_collection(qc: QdrantClient, alias: str) -> str:
 # ============================================================================
 # EMBED + UPSERT (uuid4 point IDs; frozen embed() reused from above)
 # ============================================================================
+def _context_prefix(payload: dict) -> str:
+    """A retrieval-only lead-in prepended to a chunk's EMBEDDING input (never to the
+    verbatim `text` the model quotes). It surfaces the two things a non-expert author
+    can reliably get right — the FILE NAME and the SHEET/SECTION — as plain tokens, so
+    a topic query ('firewall rules') matches even when the row content itself (IPs,
+    ports, TCP) carries no such vocabulary. Separators are normalised to spaces so
+    'EPC25-FW-rules-...' tokenizes into FW / rules / ..."""
+    stem = re.sub(r"[-_]+", " ", pathlib.Path(payload.get("source_file", "")).stem).strip()
+    loc = payload.get("sheet") or payload.get("section_title") or ""
+    parts = [f"file: {stem}"] if stem else []
+    if loc:
+        parts.append(str(loc))
+    return (" | ".join(parts) + " | ") if parts else ""
+
+
 def _upsert_records(qc: QdrantClient, collection: str, records: list[dict]) -> list[str]:
     """Embed a batch of chunk records and upsert with fresh uuid4 IDs.
 
@@ -508,13 +523,15 @@ def _upsert_records(qc: QdrantClient, collection: str, records: list[dict]) -> l
     if not records:
         return []
     # Embed the decoration-stripped text_clean (prose); table rows have no clean
-    # variant, so fall back to their verbatim text. Mirror the value into the
-    # payload so every point stores the exact string its vectors were built from.
-    emb_texts = [r.get("text_clean") or r["text"] for r in records]
+    # variant, so fall back to their verbatim text. Each embed input is prefixed with
+    # a filename + sheet/section context lead-in (_context_prefix) so topic/filename
+    # queries retrieve. text_clean stores EXACTLY what was embedded; the verbatim
+    # `text` returned to the model is untouched (no lead-in).
+    emb_texts = [_context_prefix(r["payload"]) + (r.get("text_clean") or r["text"]) for r in records]
     dense, sparse = embed(emb_texts, kind="passage")
     points, ids = [], []
     for r, et, dv, sv in zip(records, emb_texts, dense, sparse):
-        r["payload"].setdefault("text_clean", et)
+        r["payload"]["text_clean"] = et
         pid = str(uuid.uuid4())
         ids.append(pid)
         points.append(qm.PointStruct(
