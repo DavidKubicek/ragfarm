@@ -15,7 +15,7 @@ WorkingDirectory=/home/dave/llama.cpp
 ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
   -m ${LLM_GGUF_PATH} \
   --host 127.0.0.1 --port 8080 -ngl 999 -c 32768 --context-shift --keep 3072 --jinja \
-  --top-k 1 --top-p 0 --min-p 0 --seed 42 --temperature 0 --mlock --mmap --alias qwen2.5-7b-instruct
+  --top-k 1 --top-p 0 --min-p 0 --seed 42 --temperature 0 -fa -v --mlock --mmap --alias qwen2.5-7b-instruct
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
