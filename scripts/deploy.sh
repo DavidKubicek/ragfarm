@@ -164,6 +164,7 @@ phase_venv() {
 	EMBED_MODEL_PATH="$(read_env_var EMBED_MODEL_PATH)"
 	RERANK_GGUF_PATH="$(read_env_var RERANK_GGUF_PATH)"
 	LLM_GGUF_PATH="$(read_env_var LLM_GGUF_PATH)"
+	LLM_GGUF_MMPROJ="$(read_env_var LLM_GGUF_MMPROJ)"
 
 	# GATE
 	"$VENV/bin/python" - <<'PY' || die "venv import check failed"
@@ -178,6 +179,9 @@ PY
 		|| die "no weight file (safetensors/bin) at EMBED_MODEL_PATH ($EMBED_MODEL_PATH)"
 	[ -n "$RERANK_GGUF_PATH" ] && [ -f "$RERANK_GGUF_PATH" ] || die "RERANK_GGUF_PATH missing or unset ($RERANK_GGUF_PATH)"
 	[ -n "$LLM_GGUF_PATH" ] && [ -f "$LLM_GGUF_PATH" ] || die "LLM_GGUF_PATH missing or unset ($LLM_GGUF_PATH)"
+	# LLM_GGUF_MMPROJ is optional (blank = text-only model) but if SET must exist —
+	# a stale/missing path here breaks llama-server startup in phase_host_services.
+	[ -z "$LLM_GGUF_MMPROJ" ] || [ -f "$LLM_GGUF_MMPROJ" ] || die "LLM_GGUF_MMPROJ set but file missing ($LLM_GGUF_MMPROJ)"
 	ok "venv ready; deps import; embedder+reranker+LLM present"
 }
 

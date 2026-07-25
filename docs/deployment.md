@@ -157,17 +157,16 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
 - `fetch-llm.sh` — fetch/swap the generative LLM GGUF into `models/llm/<slug>/` and
   write `LLM_GGUF_PATH` to `.env` (the unit reads it). `--list` shows known-good
   tool-calling LLMs; `--repo`/`--file` swap; `--force` re-fetch. Restart `ragfarm-llama`.
-  **Vision models** (e.g. Qwen2.5-VL) additionally need `--mmproj <glob>` — a
-  vision-language GGUF requires a second, small "multimodal projector" GGUF passed to
-  llama-server as `--mmproj`; without it the model loads but cannot see images. After
-  every fetch the script re-scans the model's directory and writes `LLM_GGUF_MMPROJ`
-  from whatever `*mmproj*.gguf` is present, **clearing it** (not leaving it stale) when
-  the model has none — so switching back to a text-only model can't accidentally launch
-  with a leftover `--mmproj` pointing at an unrelated projector. Example:
+  **Vision models** (e.g. Qwen2.5-VL) are handled automatically, no separate flag: a
+  vision-language GGUF needs a second, small "multimodal projector" GGUF passed to
+  llama-server as `--mmproj`, or it loads but can't see images. Before downloading,
+  the script checks whether the HF repo itself hosts a `*mmproj*.gguf`; if so it
+  fetches that too and writes `LLM_GGUF_MMPROJ`, else (plain text model) it **clears**
+  that var — so switching back to a text-only model can't launch with a leftover
+  `--mmproj` from a previous vision model. Example (fetches both files):
   ```bash
   scripts/fetch-llm.sh --repo ggml-org/Qwen2.5-VL-7B-Instruct-GGUF \
-    --file 'Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf' \
-    --mmproj 'mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf'
+    --file 'Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf'
   ```
 - `activate-llm.sh` — switch the active LLM among models **already on disk**, no
   re-download. Lists every `models/llm/<slug>/` that has a complete GGUF (interactive

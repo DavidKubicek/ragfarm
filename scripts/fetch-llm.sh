@@ -12,20 +12,14 @@
 #   scripts/fetch-llm.sh                                  # default: Qwen2.5-7B-Instruct Q4_K_M
 #   scripts/fetch-llm.sh --list                            # show known-good LLMs, then exit
 #   scripts/fetch-llm.sh --repo <hf-repo> --file <glob>    # swap to a different GGUF model
-#   scripts/fetch-llm.sh --repo <hf-repo> --file <glob> --mmproj <glob>   # vision model
-#                                                            # (also fetches the mmproj GGUF)
 #   scripts/fetch-llm.sh --force                           # re-fetch even if present
 #
-# VISION MODELS (mmproj): a vision-language GGUF (e.g. Qwen2.5-VL) needs a SECOND
-# small GGUF — the multimodal projector — passed to llama-server as `--mmproj`. Pass
-# its glob via --mmproj to fetch it alongside the main file. Either way, after any
-# fetch this script re-scans DEST_DIR and writes LLM_GGUF_MMPROJ from whatever
-# `*mmproj*.gguf` file is present (HF vision repos name it that way — e.g.
-# ggml-org/Qwen2.5-VL-7B-Instruct-GGUF ships mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf)
-# — and CLEARS LLM_GGUF_MMPROJ when none is found, so switching back to a
-# text-only model doesn't leave a stale --mmproj pointing at the wrong model.
-# `scripts/activate-llm.sh` does the same detection when picking among models
-# already on disk, without re-downloading.
+# VISION MODELS: no separate flag needed — before downloading, this script checks
+# whether HF_REPO itself hosts a `*mmproj*.gguf` (vision repos do, e.g.
+# ggml-org/Qwen2.5-VL-7B-Instruct-GGUF ships mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf).
+# If so it fetches that too and writes LLM_GGUF_MMPROJ; if not (plain text model),
+# LLM_GGUF_MMPROJ is cleared. `scripts/activate-llm.sh` does the same detection
+# locally when switching among models already on disk.
 #
 # After fetching, restart the unit to pick it up:
 #   sudo systemctl restart ragfarm-llama        # or: scripts/stack.sh restart
@@ -36,30 +30,28 @@ cd "$REPO_ROOT"
 source scripts/lib-models.sh
 
 # Known-good tool-calling GGUF LLMs (hints for --list; --file selects the quant).
-# mmproj column is blank for text-only models; vision models list its glob too.
+# Vision models need no separate entry field — mmproj is auto-detected at fetch time.
 LLMS=(
-	"Qwen/Qwen2.5-7B-Instruct-GGUF | qwen2.5-7b-instruct-q4_k_m*.gguf | | ~4.7GB Q4_K_M. DEFAULT; fits the iGPU."
-	"Qwen/Qwen2.5-14B-Instruct-GGUF | qwen2.5-14b-instruct-q4_k_m*.gguf | | ~9GB Q4_K_M. Better tool discipline; more VRAM."
-	"Qwen/Qwen2.5-32B-Instruct-GGUF | qwen2.5-32b-instruct-q4_k_m*.gguf | | ~20GB Q4_K_M. Prod-class (ADR-0008 HW note)."
-	"bartowski/Meta-Llama-3.1-8B-Instruct-GGUF | Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf | | ~4.9GB. Llama alternative, tool-calling."
-	"ggml-org/Qwen2.5-VL-7B-Instruct-GGUF | Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf | mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf | ~5GB + ~1.3GB mmproj. VISION — pass both --file and --mmproj."
+	"Qwen/Qwen2.5-7B-Instruct-GGUF | qwen2.5-7b-instruct-q4_k_m*.gguf | ~4.7GB Q4_K_M. DEFAULT; fits the iGPU."
+	"Qwen/Qwen2.5-14B-Instruct-GGUF | qwen2.5-14b-instruct-q4_k_m*.gguf | ~9GB Q4_K_M. Better tool discipline; more VRAM."
+	"Qwen/Qwen2.5-32B-Instruct-GGUF | qwen2.5-32b-instruct-q4_k_m*.gguf | ~20GB Q4_K_M. Prod-class (ADR-0008 HW note)."
+	"bartowski/Meta-Llama-3.1-8B-Instruct-GGUF | Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf | ~4.9GB. Llama alternative, tool-calling."
+	"ggml-org/Qwen2.5-VL-7B-Instruct-GGUF | Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf | ~5GB. VISION — mmproj auto-fetched."
 )
 
 list_models() {
 	printf 'Known-good tool-calling GGUF LLMs (pick by VRAM budget; --file selects the quant):\n\n'
-	printf '  %-38s %-38s %-34s %s\n' "REPO (--repo)" "FILE (--file)" "MMPROJ (--mmproj)" "notes"
-	local m r f p n
+	printf '  %-42s %-38s %s\n' "REPO (--repo)" "FILE (--file)" "notes"
+	local m r f n
 	for m in "${LLMS[@]}"; do
-		IFS='|' read -r r f p n <<< "$m"
-		printf '  %-38s %-38s %-34s %s\n' "$(echo "$r" | xargs)" "$(echo "$f" | xargs)" "$(echo "${p:--}" | xargs)" "$(echo "$n" | xargs)"
+		IFS='|' read -r r f n <<< "$m"
+		printf '  %-42s %-38s %s\n' "$(echo "$r" | xargs)" "$(echo "$f" | xargs)" "$(echo "$n" | xargs)"
 	done
 	printf '\nGGUF is downloaded directly (no conversion). Split shards auto-load from the first.\n'
-	printf 'Vision models: pass BOTH --file (main GGUF) and --mmproj (projector GGUF).\n'
 }
 
 HF_REPO="Qwen/Qwen2.5-7B-Instruct-GGUF"
 FILE_GLOB="qwen2.5-7b-instruct-q4_k_m*.gguf"
-MMPROJ_GLOB=""
 FORCE=0
 ENV_FILE=".env"
 
@@ -68,10 +60,9 @@ while [ $# -gt 0 ]; do
 		--list)     list_models; exit 0 ;;
 		--repo)     HF_REPO="$2"; shift 2 ;;
 		--file)     FILE_GLOB="$2"; shift 2 ;;
-		--mmproj)   MMPROJ_GLOB="$2"; shift 2 ;;
 		--force)    FORCE=1; shift ;;
 		--env-file) ENV_FILE="$2"; shift 2 ;;
-		-h|--help)  sed -n '2,31p' "$0"; exit 0 ;;
+		-h|--help)  sed -n '2,25p' "$0"; exit 0 ;;
 		*) die "unknown arg: $1 (see --help / --list)" ;;
 	esac
 done
@@ -95,24 +86,20 @@ else
 	[ -n "$existing" ] || die "download completed but no .gguf matching '$FILE_GLOB' landed in $DEST_DIR"
 fi
 
-if [ -n "$MMPROJ_GLOB" ]; then
-	mmproj_existing="$(mmproj_file)"
-	if [ -n "$mmproj_existing" ] && [ "$FORCE" != 1 ]; then
-		ok "mmproj GGUF already present: $mmproj_existing"
-	else
-		info "downloading mmproj ($MMPROJ_GLOB) -> $DEST_DIR"
-		hf_snapshot_allow "$HF_REPO" "$DEST_DIR" "$MMPROJ_GLOB" >/dev/null
-		[ -n "$(mmproj_file)" ] || die "download completed but no .gguf matching '$MMPROJ_GLOB' landed in $DEST_DIR"
+if [ -z "$(mmproj_file)" ] || [ "$FORCE" = 1 ]; then
+	mmproj_pick="$(hf_pick_mmproj "$HF_REPO" "$FILE_GLOB")"
+	if [ -n "$mmproj_pick" ]; then
+		info "vision model detected -> fetching mmproj ($mmproj_pick)"
+		hf_snapshot_allow "$HF_REPO" "$DEST_DIR" "$mmproj_pick" >/dev/null
+		[ -n "$(mmproj_file)" ] || die "mmproj download completed but no .gguf landed in $DEST_DIR"
 	fi
 fi
 
 env_upsert "$ENV_FILE" LLM_GGUF_PATH "$REPO_ROOT/$existing"
 ok "LLM_GGUF_PATH=$REPO_ROOT/$existing  ($ENV_FILE)"
 
-# Always re-detect (not just when --mmproj was passed): a *mmproj*.gguf might already
-# sit in DEST_DIR from a prior fetch, or none might be present — either way the .env
-# key must reflect DEST_DIR's actual contents. Clearing on "none found" matters: it
-# stops a stale --mmproj from a previous vision model leaking into a text-only launch.
+# Reflects DEST_DIR's actual contents either way — clears LLM_GGUF_MMPROJ when this
+# repo has none, so a stale --mmproj from a previous vision model can't leak in.
 mmproj_now="$(mmproj_file)"
 if [ -n "$mmproj_now" ]; then
 	env_upsert "$ENV_FILE" LLM_GGUF_MMPROJ "$REPO_ROOT/$mmproj_now"

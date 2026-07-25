@@ -72,6 +72,34 @@ print(path, end="")
 PY
 }
 
+# hf_pick_mmproj REPO MAIN_FILE_GLOB — auto-detect a vision model's projector
+# GGUF. Lists REPO's files; if none contain "mmproj", prints nothing (text-only
+# model, not an error). Otherwise picks one: prefers a name sharing MAIN_FILE_GLOB's
+# quant token (e.g. both "q4_k_m"), else prefers one containing "f16" (the usual
+# best-precision default for a projector — it's tiny, quant doesn't matter much),
+# else the alphabetically first. Prints the chosen filename (repo-relative), or
+# nothing.
+hf_pick_mmproj() {
+	local repo="$1" main_glob="$2"
+	"$VENV_PY" - "$repo" "$main_glob" <<'PY'
+import sys, re
+from huggingface_hub import list_repo_files
+repo, main_glob = sys.argv[1], sys.argv[2]
+files = list_repo_files(repo)
+cands = sorted(f for f in files if "mmproj" in f.lower() and f.lower().endswith(".gguf"))
+if not cands:
+    sys.exit(0)
+m = re.search(r"(q\d_k_[ms]|q\d_\d|f16|f32|bf16)", main_glob, re.I)
+quant = m.group(1).lower() if m else None
+pick = None
+if quant:
+    pick = next((f for f in cands if quant in f.lower()), None)
+if not pick:
+    pick = next((f for f in cands if "f16" in f.lower()), None)
+print(pick or cands[0], end="")
+PY
+}
+
 # hf_snapshot_allow REPO DEST ALLOW_GLOB — include-filtered snapshot (e.g. one
 # GGUF quant out of a repo hosting several). Prints the resolved local path.
 hf_snapshot_allow() {
