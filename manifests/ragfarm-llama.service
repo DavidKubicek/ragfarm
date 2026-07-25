@@ -9,13 +9,21 @@ User=dave
 # LLM_GGUF_PATH default matches `scripts/fetch-llm.sh`'s default fetch target;
 # EnvironmentFile is loaded AFTER so a value in .env (written by fetch-llm.sh when
 # you swap models, or by hand) OVERRIDES this default — same for proxy vars.
+# LLM_GGUF_MMPROJ default is empty: text-only models pass no --mmproj. A vision
+# model (fetch-llm.sh --mmproj, or scripts/activate-llm.sh) sets it in .env, which
+# overrides this the same way LLM_GGUF_PATH does.
 Environment=LLM_GGUF_PATH=/home/dave/ragfarm/models/llm/qwen2.5-7b-instruct-gguf/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf
+Environment=LLM_GGUF_MMPROJ=
 EnvironmentFile=-/home/dave/ragfarm/.env
 WorkingDirectory=/home/dave/llama.cpp
-ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
-  -m ${LLM_GGUF_PATH} \
-  --host 127.0.0.1 --port 8080 -ngl 999 -c 32768 --context-shift --keep 3072 --jinja \
-  --top-k 1 --top-p 0 --min-p 0 --seed 42 --temperature 0 -fa -v --mlock --mmap --alias qwen2.5-7b-instruct
+# ExecStart delegates to a wrapper script (scripts/llama-launch.sh) rather than
+# inlining `${LLM_GGUF_MMPROJ:+--mmproj ...}` here: systemd does its OWN $VAR
+# substitution on ExecStart= before any shell sees it and does NOT understand
+# bash's :+ operator, so that inline form risks systemd mangling it — unverifiable
+# without a live restart. The wrapper is plain bash, fully testable offline
+# (LLAMA_LAUNCH_DRY_RUN=1), and does the one conditional itself. Same flags as
+# before, byte-for-byte, when LLM_GGUF_MMPROJ is unset.
+ExecStart=/home/dave/ragfarm/scripts/llama-launch.sh
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target

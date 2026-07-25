@@ -157,6 +157,30 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
 - `fetch-llm.sh` — fetch/swap the generative LLM GGUF into `models/llm/<slug>/` and
   write `LLM_GGUF_PATH` to `.env` (the unit reads it). `--list` shows known-good
   tool-calling LLMs; `--repo`/`--file` swap; `--force` re-fetch. Restart `ragfarm-llama`.
+  **Vision models** (e.g. Qwen2.5-VL) additionally need `--mmproj <glob>` — a
+  vision-language GGUF requires a second, small "multimodal projector" GGUF passed to
+  llama-server as `--mmproj`; without it the model loads but cannot see images. After
+  every fetch the script re-scans the model's directory and writes `LLM_GGUF_MMPROJ`
+  from whatever `*mmproj*.gguf` is present, **clearing it** (not leaving it stale) when
+  the model has none — so switching back to a text-only model can't accidentally launch
+  with a leftover `--mmproj` pointing at an unrelated projector. Example:
+  ```bash
+  scripts/fetch-llm.sh --repo ggml-org/Qwen2.5-VL-7B-Instruct-GGUF \
+    --file 'Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf' \
+    --mmproj 'mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf'
+  ```
+- `activate-llm.sh` — switch the active LLM among models **already on disk**, no
+  re-download. Lists every `models/llm/<slug>/` that has a complete GGUF (interactive
+  numbered prompt, or `--dir <slug>` / `--path <file>` non-interactively; `--list`
+  prints and exits), and writes `LLM_GGUF_PATH` + `LLM_GGUF_MMPROJ` to `.env` using the
+  same mmproj auto-detect/clear rule as `fetch-llm.sh`. This is the tool for "I already
+  fetched three models, which one is live" — fetch once per model, activate freely
+  between them:
+  ```bash
+  scripts/activate-llm.sh --list                       # what's on disk
+  scripts/activate-llm.sh --dir qwen2.5-32b-instruct-gguf   # switch to it
+  sudo systemctl restart ragfarm-llama                  # apply
+  ```
 - `fetch-encoder.sh` — fetch/swap the **matched** embedder+reranker pair into
   `models/embeddings/<slug>/` and `models/reranker/<slug>/` (converts the reranker to
   GGUF), writing `EMBED_MODEL_PATH` + `RERANK_GGUF_PATH` to `.env`. `--list` shows
@@ -165,11 +189,14 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   `deploy.sh`'s venv phase calls them (no duplication). `lib-models.sh` is their
   shared helper (sourced, not run).
 
-**Activating a swapped model** — the fetch scripts only write `.env`; the units read
-it on (re)start. What you must do after a fetch depends on which model changed:
-- **LLM** (`fetch-llm.sh`) → `sudo systemctl restart ragfarm-llama`. Nothing else — the
-  LLM doesn't touch embeddings or the corpus. (If the model *alias* changed, also re-run
-  `infra/openwebui/setup_openwebui.py` so the OWUI preset points at it.)
+**Activating a swapped model** — the fetch/activate scripts only write `.env`; the
+units read it on (re)start. What you must do after a swap depends on which model changed:
+- **LLM** (`fetch-llm.sh` / `activate-llm.sh`) → `sudo systemctl restart ragfarm-llama`.
+  Nothing else — the LLM doesn't touch embeddings or the corpus. (If the model *alias*
+  changed, also re-run `infra/openwebui/setup_openwebui.py` so the OWUI preset points at
+  it.) The unit's `ExecStart` conditionally adds `--mmproj` only when `LLM_GGUF_MMPROJ`
+  is non-empty, so a text-only `.env` (the common case) launches exactly as before —
+  the mmproj knob is a no-op unless you're running a vision model.
 - **Reranker only** → `sudo systemctl restart ragfarm-reranker`. Query-time only; no re-ingest.
 - **Embedder** (`fetch-encoder.sh`) → the vector space changes, so you MUST re-embed:
   `sudo systemctl restart ragfarm-embedder ragfarm-reranker` **then**
