@@ -74,11 +74,14 @@ PY
 
 # hf_pick_mmproj REPO MAIN_FILE_GLOB — auto-detect a vision model's projector
 # GGUF. Lists REPO's files; if none contain "mmproj", prints nothing (text-only
-# model, not an error). Otherwise picks one: prefers a name sharing MAIN_FILE_GLOB's
-# quant token (e.g. both "q4_k_m"), else prefers one containing "f16" (the usual
-# best-precision default for a projector — it's tiny, quant doesn't matter much),
-# else the alphabetically first. Prints the chosen filename (repo-relative), or
-# nothing.
+# model, not an error). Otherwise picks the SMALLEST reasonable one, cheapest VRAM
+# first — a projector's own quant barely affects output quality (it's a tiny
+# adapter, not the reasoning model), so there's no reason to default to the
+# biggest file: prefers a name sharing MAIN_FILE_GLOB's quant token (rare — most
+# repos don't offer a matching mmproj quant), else Q8_0 (smallest that most repos
+# actually ship; confirmed on ggml-org/Qwen2.5-VL-7B-Instruct-GGUF: Q8_0 853MB vs
+# f16 1354MB, same architecture), else f16, else bf16, else alphabetically first.
+# Prints the chosen filename (repo-relative), or nothing.
 hf_pick_mmproj() {
 	local repo="$1" main_glob="$2"
 	"$VENV_PY" - "$repo" "$main_glob" <<'PY'
@@ -89,13 +92,20 @@ files = list_repo_files(repo)
 cands = sorted(f for f in files if "mmproj" in f.lower() and f.lower().endswith(".gguf"))
 if not cands:
     sys.exit(0)
+
+def has_token(fname, token):
+    # word-boundary match so "f16" doesn't false-match inside "bf16"
+    return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", fname.lower()) is not None
+
 m = re.search(r"(q\d_k_[ms]|q\d_\d|f16|f32|bf16)", main_glob, re.I)
 quant = m.group(1).lower() if m else None
 pick = None
 if quant:
-    pick = next((f for f in cands if quant in f.lower()), None)
-if not pick:
-    pick = next((f for f in cands if "f16" in f.lower()), None)
+    pick = next((f for f in cands if has_token(f, quant)), None)
+for fallback in ("q8_0", "f16", "bf16"):
+    if pick:
+        break
+    pick = next((f for f in cands if has_token(f, fallback)), None)
 print(pick or cands[0], end="")
 PY
 }
