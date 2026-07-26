@@ -80,22 +80,47 @@ both Q8_0 and f16 projectors (confirmed on `ggml-org/Qwen2.5-VL-7B-Instruct-GGUF
 Q8_0 = 853 MB vs f16 = 1354 MB). The word-boundary regex in that function is
 non-trivial: naive substring matching false-matched `f16` inside `bf16`.
 
-## Instruct vs Thinking — sampler & `/think` control
+## Instruct vs Thinking — sampler & thinking control
 
-Qwen3 introduces explicit **thinking mode toggles** the app can send inside the
-user prompt:
+Qwen3 nominally exposes `/think` and `/no_think` control tokens **for the base
+text template only**. The Qwen3-VL-**Thinking** chat template (baked into the
+GGUF at `tokenizer.chat_template`) is different:
+- No `enable_thinking` kwarg — `chat_template_kwargs.enable_thinking` is
+  silently ignored (llama.cpp passes it through, but the template has no
+  matching `{% if %}` gate to read it).
+- The `add_generation_prompt` block ends with a hardcoded
+  `<|im_start|>assistant\n<think>\n` — every assistant turn is *forced* to
+  begin a reasoning block. There is no template-level switch to turn thinking
+  off for a single turn.
 
-- **`/think`** — force the model to emit a `<think>…</think>` reasoning block
-  before the answer. Default for *Thinking* variants (`Qwen3-VL-8B-Thinking`,
-  `Qwen3-30B-A3B-Thinking`).
-- **`/no_think`** — suppress the reasoning block for a snappier answer;
-  effectively runs the Thinking variant like an Instruct one for that turn.
+Empirically confirmed by probing the live GGUF (2026-07-27): identical
+`reasoning_content` output with and without the kwarg. `/no_think` in a user
+message is likewise a no-op with this template.
 
-These live in the user message, not the system prompt (Qwen's chat template
-parses them out). Practical use: leave the default (thinking on) for hard
-questions where the extra latency is worth the accuracy; append `/no_think` for
-follow-ups, quick lookups, or when you're presenting live and can't wait 20 s
-per turn.
+**Consequence for the vision preset.** To get "no-think by default with
+`/think` as opt-in", the honest options are:
+
+1. **Swap to `Qwen3-VL-8B-Instruct`** — never thinks, no per-turn opt-in to
+   turn it back on (Instruct simply doesn't do reasoning mode). Fast + quiet.
+2. **Custom `--chat-template <file>` override** that grafts the text-template's
+   `enable_thinking` block onto the VL template. Fragile: needs re-verification
+   on every model upgrade, and subtle template drift can break vision or
+   tool-calling in non-obvious ways.
+3. **Post-strip `<think>…</think>` from the response** — cosmetic only, still
+   pays full latency. Bad trade.
+
+Option 1 is the recommended path for the vision preset baseline; keep the
+Thinking GGUF on disk as an explicit `activate-llm.sh` swap for the rare
+questions where the reasoning trace is worth the wait.
+
+**Why the vision preset must be non-greedy (either variant).** Thinking models
+loop on greedy decode — the reasoning trace can re-derive the same intermediate
+step forever because the argmax never provides an escape. Qwen's own guidance
+is `temperature ≈ 0.6` as a floor, and `top_k`/`top_p`/`min_p` left at defaults
+so nucleus sampling picks a variety of continuations. This preset therefore
+*intentionally* sacrifices bit-for-bit reproducibility — outputs vary between
+runs, and that's the trade for coherent multi-step reasoning. The text preset
+stays greedy for the reproducibility the tables/coding rules depend on.
 
 **Why the vision preset must be non-greedy.** Thinking models loop on greedy
 decode — the reasoning trace can re-derive the same intermediate step forever
@@ -114,25 +139,82 @@ class="mxgraph">` in the DOM and turns the enclosed `<mxfile>…</mxfile>` XML i
 an interactive pan/zoom/lightbox canvas. The system-prompt template gives the
 model the exact wrapper to output.
 
-**Two problems solved:**
+### Why we run our own nginx (the load-bearing "why")
 
-1. **CSP.** OWUI's iframe sandbox defaults to a strict CSP that blocks all
-   `script-src`. Investigated whether that's a source-code patch (which would be
-   a no-go): it's not — OWUI reads `IFRAME_CSP` as an env var
-   (`open_webui/config.py:1696`). So we set a loose-but-scoped CSP in
-   `infra/compose.yaml` that whitelists only `http://127.0.0.1:8091` for
-   `script-src` — nothing else opens up.
+The draw.io reference deployment lives at `viewer.diagrams.net` — one script
+(`js/viewer-static.min.js`) plus five sibling trees the viewer XHR-loads at
+runtime:
 
-2. **Internet dependency at demo time.** The reference template loads
-   `viewer-static.min.js` from `https://viewer.diagrams.net`. That's a hard fail
-   on any air-gapped demo and a spinner-of-doom on flaky conference Wi-Fi. Instead
-   we bake the 4 MB JS into the repo (under `infra/drawio-viewer/`, gitignored)
-   and serve it via a new `nginx:alpine` container on `127.0.0.1:8091`.
+- `/styles/*.xml`      — visual themes and shape-style presets
+- `/shapes/*` + `/shapes/*.js`  — the JS-side shape catalogues (BPMN, AWS, mockup, ArchiMate, ER, iOS7, …)
+- `/stencils/*.xml`    — XML stencil libraries (AWS, Azure, GCP, Cisco, IBM, Oracle, Kubernetes, VeeamGP, …)
+- `/math4/es5/*`       — MathJax for equations inside diagrams
+- `/img/*`             — UI icons, background tiles, expand/collapse arrows
 
-The vision system prompt points at that local URL. The viewer's internal
-references to `viewer.diagrams.net/styles` and `/shapes` remain — the diagram
-renders correctly with those fetches failing gracefully; only the finer stencil
-sets are missing.
+The viewer JS hardcodes these prefixes at
+`window.STYLE_PATH / SHAPES_PATH / STENCIL_PATH / DRAW_MATH_URL / GRAPH_IMAGE_PATH`,
+each defaulting to `https://viewer.diagrams.net/…`. If those URLs are unreachable
+(air-gapped demo, corporate proxy without diagrams.net whitelisted, or just flaky
+conference Wi-Fi), the diagram renders as **blank white space** the moment the
+model uses any shape more advanced than a plain rectangle. This is the failure
+mode we absolutely can't have live — a diagram request that visibly returns
+nothing invalidates the whole vision demo.
+
+So the vision path *depends* on a local mirror of the entire draw.io webapp,
+not just the script. A stub with only `viewer-static.min.js` is exactly the
+"looks fine in dev, dies on stage" trap.
+
+### What the nginx serves
+
+`infra/compose.yaml` runs an `nginx:alpine` container (`drawio-viewer`) mounting
+`infra/drawio-viewer/` read-only on `0.0.0.0:80` — LAN-reachable so demo
+attendees on their own laptops resolve the same URLs the model outputs.
+
+Contents come from `jgraph/drawio`'s `src/main/webapp/` (~151 MB, upstream's
+official tree of everything `viewer.diagrams.net` serves) — rehydrated by
+`scripts/fetch-drawio-viewer.sh` (shallow + sparse-checkout clone, idempotent).
+The 151 MB blob is gitignored; only two files are tracked:
+
+- `index.html` — the landing page (see below).
+- `drawio-editor.html` — the renamed upstream `index.html` (the full draw.io
+  editor). Renamed to free `/` for our landing page.
+
+The vision system prompt's RULE 5 draw.io template sets the five
+`window.*_PATH` overrides to `http://127.0.0.1/…` **before** the viewer JS
+loads, so no runtime fetch ever leaves the box. Verified end-to-end: `/`,
+`/drawio-editor.html`, `/js/viewer-static.min.js`, `/styles/default.xml`,
+`/stencils/aws4.xml`, `/shapes/mxAndroid.js` all return HTTP 200 with the
+compose stack up. Air-gap-safe.
+
+### CSP: env, not code patch
+
+OWUI's HTML-preview iframe defaults to a strict Content-Security-Policy that
+blocks all `script-src`, so even a same-origin script tag would render inert.
+Investigated whether relaxing this needs a code patch (which would be a hard
+no — patching an upstream image is un-supportable): it does not.
+`open_webui/config.py:1696` reads `IFRAME_CSP` as a straight env var. We set it
+in `infra/compose.yaml`'s `open-webui.environment` to a loose-but-scoped
+policy: `script-src / style-src / img-src / connect-src / font-src` all admit
+`'self'` plus `http://127.0.0.1` (with explicit `:80`); nothing else opens up.
+No upstream image modification.
+
+### Landing page — a genuine home + Eywo-styled
+
+Since we already run an nginx to solve the diagram problem, `index.html` is a
+tiny landing page rather than an empty directory listing. Styled to match the
+Eywo brand (dark theme, mint accent, numbered Solutions row) so operators
+landing on `http://<host>/` see something coherent, and adds a fourth Solutions
+row **"04 · Custom original on-prem AI"** linking straight to OWUI on `:3000`.
+Cheap; adds a real front door.
+
+### Failure modes and their fixes
+
+| Symptom in the OWUI HTML preview | Cause | Fix |
+|----------------------------------|-------|-----|
+| Blank canvas, no shapes at all   | `viewer-static.min.js` failed to load | Check `curl http://127.0.0.1/js/viewer-static.min.js` returns 200; if 404 → the mirror is a stub, run `scripts/fetch-drawio-viewer.sh` |
+| Rectangles render but complex shapes are blank | Runtime shape/stencil fetch failed | Same fix — likely the mirror is partial |
+| "Refused to load the script" in browser console | OWUI's CSP is still the default (strict) | `IFRAME_CSP` didn't take effect; `docker compose up -d --force-recreate open-webui` to reload env |
+| Script loads but XHR to /shapes 404s | `window.*_PATH` overrides missing from the model's output | Re-run `setup_openwebui.py` — the prompt template is the source of truth for those |
 
 ## Format is user-chosen, not routed
 
