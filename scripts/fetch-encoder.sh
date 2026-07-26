@@ -21,6 +21,7 @@
 #   scripts/fetch-encoder.sh --list          # show known-good matching pairs, then exit
 #   scripts/fetch-encoder.sh --embed-repo <repo> --rerank-repo <repo>
 #   scripts/fetch-encoder.sh --force         # re-fetch / re-convert even if present
+#   scripts/fetch-encoder.sh --no-restart    # write .env, DON'T sudo systemctl
 #
 # After fetching, restart both units:
 #   sudo systemctl restart ragfarm-embedder ragfarm-reranker   # or scripts/stack.sh restart
@@ -67,6 +68,7 @@ while [ $# -gt 0 ]; do
 		--rerank-repo)     RERANK_REPO="$2"; shift 2 ;;
 		--rerank-revision) RERANK_REVISION="$2"; shift 2 ;;
 		--force)           FORCE=1; shift ;;
+		--no-restart)      export NO_RESTART=1; shift ;;
 		--env-file)        ENV_FILE="$2"; shift 2 ;;
 		--llama-dir)       LLAMA_DIR="$2"; shift 2 ;;
 		-h|--help)         sed -n '2,28p' "$0"; exit 0 ;;
@@ -98,6 +100,7 @@ RERANK_DIR="models/reranker/$RERANK_SLUG"
 RERANK_GGUF="$RERANK_DIR/${RERANK_SLUG}-f16.gguf"
 if [ -f "$RERANK_GGUF" ] && [ "$FORCE" != 1 ]; then
 	ok "reranker GGUF already present: $RERANK_GGUF"
+	RERANK_FETCHED=0
 else
 	[ -f "$LLAMA_DIR/convert_hf_to_gguf.py" ] || die "llama.cpp converter missing at $LLAMA_DIR (build llama.cpp first — infra/llama/README.md)"
 	SRC="$(mktemp -d)"; trap 'rm -rf "$SRC"' EXIT
@@ -107,6 +110,7 @@ else
 	info "converting -> $RERANK_GGUF (f16)"
 	"$VENV_PY" "$LLAMA_DIR/convert_hf_to_gguf.py" "$SRC" --outfile "$RERANK_GGUF" --outtype f16 \
 		|| die "reranker GGUF conversion failed"
+	RERANK_FETCHED=1
 fi
 env_upsert "$ENV_FILE" RERANK_GGUF_PATH "$REPO_ROOT/$RERANK_GGUF"
 
@@ -114,8 +118,11 @@ ok "EMBED_MODEL_PATH=$REPO_ROOT/$EMBED_DIR"
 ok "RERANK_GGUF_PATH=$REPO_ROOT/$RERANK_GGUF   ($ENV_FILE)"
 if [ "${EMBED_FETCHED:-0}" = 1 ]; then
 	warn "the EMBEDDER changed — the corpus MUST be re-embedded or hybrid retrieval breaks"
-	info "  1) restart:   sudo systemctl restart ragfarm-embedder ragfarm-reranker   (or scripts/stack.sh restart)"
-	info "  2) re-ingest: .venv/bin/python services/ingester/ingester.py --recreate --corpus \"\${CORPUS_PATH:-/data/corpus}\""
+	restart_units ragfarm-embedder ragfarm-reranker
+	info "  next MANUAL step (script does NOT run it — potentially long-running + destructive):"
+	info "    .venv/bin/python services/ingester/ingester.py --recreate --corpus \"\${CORPUS_PATH:-/data/corpus}\""
+elif [ "${RERANK_FETCHED:-0}" = 1 ]; then
+	restart_units ragfarm-reranker
 else
-	info "restart to apply (reranker-only change): sudo systemctl restart ragfarm-reranker   (or scripts/stack.sh restart)"
+	info "nothing changed on disk — no restart needed"
 fi

@@ -13,6 +13,12 @@
 #   scripts/fetch-llm.sh --list                            # show known-good LLMs, then exit
 #   scripts/fetch-llm.sh --repo <hf-repo> --file <glob>    # swap to a different GGUF model
 #   scripts/fetch-llm.sh --force                           # re-fetch even if present
+#   scripts/fetch-llm.sh --no-restart                      # write .env, DON'T sudo systemctl
+#
+# On success this script AUTO-RESTARTS ragfarm-llama via sudo so the new model is
+# immediately live — pass --no-restart if you're staging changes or batching. If
+# sudo can't get privilege non-interactively AND the terminal has no tty, the
+# restart is skipped with a WARN and the manual command is printed.
 #
 # VISION MODELS: no separate flag needed — before downloading, this script checks
 # whether HF_REPO itself hosts a `*mmproj*.gguf` (vision repos do, e.g.
@@ -57,12 +63,13 @@ ENV_FILE=".env"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--list)     list_models; exit 0 ;;
-		--repo)     HF_REPO="$2"; shift 2 ;;
-		--file)     FILE_GLOB="$2"; shift 2 ;;
-		--force)    FORCE=1; shift ;;
-		--env-file) ENV_FILE="$2"; shift 2 ;;
-		-h|--help)  sed -n '2,25p' "$0"; exit 0 ;;
+		--list)       list_models; exit 0 ;;
+		--repo)       HF_REPO="$2"; shift 2 ;;
+		--file)       FILE_GLOB="$2"; shift 2 ;;
+		--force)      FORCE=1; shift ;;
+		--env-file)   ENV_FILE="$2"; shift 2 ;;
+		--no-restart) export NO_RESTART=1; shift ;;
+		-h|--help)    sed -n '2,25p' "$0"; exit 0 ;;
 		*) die "unknown arg: $1 (see --help / --list)" ;;
 	esac
 done
@@ -108,4 +115,10 @@ else
 	env_upsert "$ENV_FILE" LLM_GGUF_MMPROJ ""
 fi
 
-info "restart to apply: sudo systemctl restart ragfarm-llama   (or scripts/stack.sh restart)"
+# Auto-restart the LLM service to activate the new .env. Only fires against the
+# real .env (not a scratch --env-file); --no-restart / NO_RESTART=1 skips it.
+if [ "$ENV_FILE" = ".env" ]; then
+    restart_units ragfarm-llama
+else
+    info "wrote $ENV_FILE (not the live .env); no service restart needed"
+fi

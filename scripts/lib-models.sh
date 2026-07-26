@@ -13,6 +13,10 @@
 #     when present (no re-download).
 #   - hf_snapshot_allow REPO DEST ALLOW_GLOB  — INCLUDE-filtered (for picking one
 #     GGUF file/shard-set out of a repo that hosts many quantizations).
+#   - restart_units UNIT... — restart the given systemd unit(s) via passwordless
+#     sudo; --no-restart on the caller (or NO_RESTART=1 env) skips it. Fetch/
+#     activate scripts call this at the end so a model swap is immediate — no
+#     "now run this restart command yourself" step the user forgets.
 #
 # All HF calls go through the huggingface_hub PYTHON API (not the `hf`/
 # `huggingface-cli` binaries) so behavior is one code path regardless of which CLI
@@ -124,3 +128,29 @@ PY
 
 # slugify REPO — "BAAI/bge-m3" -> "bge-m3" (the models/<kind>/<slug>/ dir name)
 slugify() { basename "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# restart_units UNIT... — restart the given systemd unit(s) via sudo. Honors
+# NO_RESTART=1 (used by callers with --no-restart). Uses sudo -n first so
+# non-interactive contexts don't hang on a password prompt; falls back to a
+# regular sudo (which will prompt on tty) if the passwordless attempt fails.
+# On failure, prints the manual command instead of erroring out — the .env
+# update already succeeded and the user can re-apply on their own.
+restart_units() {
+	if [ -n "${NO_RESTART:-}" ]; then
+		info "NO_RESTART set — skipping systemctl; restart manually to apply:"
+		info "    sudo systemctl restart $*"
+		return 0
+	fi
+	info "restarting $* (sudo systemctl restart)"
+	if sudo -n systemctl restart "$@" 2>/dev/null; then
+		ok "restarted: $*"
+		return 0
+	fi
+	# passwordless didn't work — try interactively (this will prompt on a tty)
+	if sudo systemctl restart "$@"; then
+		ok "restarted: $*"
+		return 0
+	fi
+	warn "restart failed; apply manually:  sudo systemctl restart $*"
+	return 1
+}

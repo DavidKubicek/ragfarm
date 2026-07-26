@@ -14,10 +14,12 @@
 #   scripts/activate-llm.sh --dir qwen2.5-32b-instruct-gguf   # activate by dir name
 #   scripts/activate-llm.sh --path /abs/path/to/model.gguf    # activate by exact file
 #   scripts/activate-llm.sh --list        # list only, no prompt, exit 0
+#   scripts/activate-llm.sh --no-restart  # write .env, DON'T sudo systemctl
 #
-# This script does NOT restart the service (same convention as fetch-llm.sh) — it
-# only writes .env. Restart to apply:
-#   sudo systemctl restart ragfarm-llama        # or: scripts/stack.sh restart
+# Auto-restarts ragfarm-llama via sudo after writing .env so the swap is
+# immediately live — pass --no-restart to stage. If sudo can't get privilege
+# non-interactively AND there is no tty for password entry, the restart is
+# skipped with a WARN and the manual command is printed.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -32,11 +34,12 @@ LIST_ONLY=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--dir)      ARG_DIR="$2"; shift 2 ;;
-		--path)     ARG_PATH="$2"; shift 2 ;;
-		--list)     LIST_ONLY=1; shift ;;
-		--env-file) ENV_FILE="$2"; shift 2 ;;
-		-h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
+		--dir)        ARG_DIR="$2"; shift 2 ;;
+		--path)       ARG_PATH="$2"; shift 2 ;;
+		--list)       LIST_ONLY=1; shift ;;
+		--env-file)   ENV_FILE="$2"; shift 2 ;;
+		--no-restart) export NO_RESTART=1; shift ;;
+		-h|--help)    sed -n '2,22p' "$0"; exit 0 ;;
 		*) die "unknown arg: $1 (see --help)" ;;
 	esac
 done
@@ -111,4 +114,8 @@ else
 	env_upsert "$ENV_FILE" LLM_GGUF_MMPROJ ""
 fi
 
-info "restart to apply: sudo systemctl restart ragfarm-llama   (or scripts/stack.sh restart)"
+if [ "$ENV_FILE" = ".env" ]; then
+    restart_units ragfarm-llama
+else
+    info "wrote $ENV_FILE (not the live .env); no service restart needed"
+fi

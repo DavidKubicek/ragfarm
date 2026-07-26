@@ -13,4 +13,11 @@ services/ingester/manifest.db*
 services/ingester/known-good.constraints.txt
 
 # draw.io viewer JS (4MB blob, re-fetch from viewer.diagrams.net)
-infra/drawio-viewer/viewer-static.min.js
+
+# drawio webapp mirror — 151 MB from jgraph/drawio; rehydrate with
+# scripts/fetch-drawio-viewer.sh. Two files are custom and tracked:
+#   index.html         — ragfarm landing page
+#   drawio-editor.html — renamed upstream editor entrypoint
+infra/drawio-viewer/*
+!infra/drawio-viewer/index.html
+!infra/drawio-viewer/drawio-editor.html

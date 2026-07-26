@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>eywo · ragfarm — on-prem RAG + infra-control AI</title>
+  <link rel="icon" href="favicon.ico">
+  <style>
+    :root {
+      --bg:        #0b0e13;
+      --bg-2:      #10131a;
+      --line:      #1e232d;
+      --ink:       #ffffff;
+      --dim:       #6b7180;
+      --dim-2:     #4a4f5a;
+      --mint:      #3fd5a3;     /* eywo mint accent */
+      --mint-ink:  #0b0e13;
+      --sun:       #e6c58a;     /* eywo pill/marker color */
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+      font: 15px/1.55 -apple-system, "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--ink); text-decoration: none; }
+    a:hover { color: var(--mint); }
+
+    /* ── top bar ── */
+    header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(11,14,19,0.85); backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--line);
+    }
+    .bar {
+      max-width: 1400px; margin: 0 auto; padding: 22px 44px;
+      display: flex; align-items: center; gap: 32px;
+    }
+    .logo {
+      font-family: "Helvetica Neue", Inter, -apple-system, sans-serif;
+      font-size: 28px; font-weight: 400; letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .logo .dot { color: var(--dim); margin: 0 8px; font-weight: 300; }
+    .logo .sub { color: var(--dim); font-size: 14px; letter-spacing: 0.02em; }
+    nav { margin-left: auto; display: flex; align-items: center; gap: 34px; }
+    nav a { color: var(--dim); font-size: 15px; }
+    nav a:hover { color: var(--ink); }
+    nav .solutions {
+      color: var(--sun);
+      display: inline-flex; align-items: center; gap: 10px;
+    }
+    nav .solutions:hover { color: var(--sun); }
+    nav .pill {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--sun); color: var(--bg);
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700;
+    }
+
+    /* ── numbered solutions block (Eywo signature) ── */
+    section.solutions {
+      max-width: 1400px; margin: 0 auto; padding: 20px 44px 40px;
+    }
+    .row {
+      display: grid; grid-template-columns: 60px 1fr 60px;
+      align-items: center; gap: 32px;
+      padding: 32px 0; border-bottom: 1px solid var(--line);
+      transition: color 0.18s ease;
+    }
+    .row:first-child { border-top: 1px solid var(--line); }
+    .row .num  { color: var(--dim-2); font-size: 14px; letter-spacing: 0.02em; }
+    .row .title {
+      color: var(--dim); font-size: clamp(38px, 5.5vw, 70px);
+      line-height: 1.05; font-weight: 400; letter-spacing: -0.015em;
+    }
+    .row.active .title { color: var(--ink); }
+    .row .arrow {
+      justify-self: end;
+      width: 46px; height: 46px; border-radius: 50%;
+      background: transparent; border: 1px solid var(--dim-2);
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--dim); font-size: 20px;
+      transition: background 0.18s, color 0.18s, border-color 0.18s, transform 0.18s;
+    }
+    .row.active .arrow {
+      background: var(--mint); color: var(--mint-ink); border-color: var(--mint);
+    }
+    .row:hover .arrow { transform: translateX(4px); }
+    a.row { display: grid; }
+
+    /* ── hero above the numbered list ── */
+    .hero {
+      max-width: 1400px; margin: 0 auto; padding: 80px 44px 24px;
+    }
+    .tag {
+      font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;
+      color: var(--mint); margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 20px; font-size: clamp(36px, 5vw, 64px);
+      line-height: 1.05; font-weight: 400; letter-spacing: -0.02em;
+    }
+    .lede {
+      color: var(--dim); font-size: 18px; line-height: 1.55; max-width: 780px;
+    }
+    .lede code {
+      background: var(--bg-2); border: 1px solid var(--line);
+      padding: 1px 6px; border-radius: 3px; font-size: 15px;
+      color: var(--mint);
+    }
+
+    /* ── footer ── */
+    footer {
+      max-width: 1400px; margin: 60px auto 0; padding: 30px 44px 40px;
+      border-top: 1px solid var(--line);
+      display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
+      color: var(--dim); font-size: 13px;
+    }
+    footer .sep { color: var(--dim-2); }
+
+    @media (max-width: 840px) {
+      .bar { padding: 18px 22px; }
+      nav a:not(.solutions) { display: none; }
+      .hero, section.solutions { padding-left: 22px; padding-right: 22px; }
+      .row { grid-template-columns: 40px 1fr 40px; gap: 16px; padding: 22px 0; }
+      .row .title { font-size: clamp(24px, 6vw, 40px); }
+      .row .arrow { width: 36px; height: 36px; font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <a class="logo" href="/" aria-label="eywo · ragfarm">
+      eywo<span class="dot">·</span><span class="sub">ragfarm</span>
+    </a>
+    <nav>
+      <a class="solutions" href="#solutions">Solutions<span class="pill">▾</span></a>
+      <a href="https://www.eywo.cz/about" target="_blank" rel="noopener">About us</a>
+      <a href="https://www.eywo.cz/blog"  target="_blank" rel="noopener">Blog</a>
+      <a href="https://www.eywo.cz/career" target="_blank" rel="noopener">Career</a>
+      <a href="https://www.eywo.cz/contacts" target="_blank" rel="noopener">Contacts</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="tag">we see through the surface</div>
+  <h1>Trusted partner in the world of enterprise IT.</h1>
+  <p class="lede">
+    Observability, IT Service Management, Infrastructure &amp; Platforms — and now
+    <strong>custom original on-prem AI</strong>. A fully private,
+    retrieval-augmented assistant for a customer VM farm that also drives
+    infra actions in natural language:
+    <code>"where is VM1 running?"</code>,
+    <code>"reboot host X"</code>.
+    Runs on-prem on a single AMD Ryzen AI 9 HX 370 box today; the durable
+    service layer redeploys unchanged on a CUDA rack tomorrow.
+  </p>
+</section>
+
+<section class="solutions" id="solutions">
+
+  <a class="row" href="https://www.eywo.cz/" target="_blank" rel="noopener">
+    <div class="num">01</div>
+    <div class="title">Observability</div>
+    <div class="arrow">→</div>
+  </a>
+
+  <a class="row" href="https://www.eywo.cz/" target="_blank" rel="noopener">
+    <div class="num">02</div>
+    <div class="title">IT Service Management</div>
+    <div class="arrow">→</div>
+  </a>
+
+  <a class="row" href="https://www.eywo.cz/" target="_blank" rel="noopener">
+    <div class="num">03</div>
+    <div class="title">Infrastructure &amp; Platforms</div>
+    <div class="arrow">→</div>
+  </a>
+
+  <a class="row active" href="http://127.0.0.1:3000" target="_blank" rel="noopener">
+    <div class="num">04</div>
+    <div class="title">Custom original on-prem AI</div>
+    <div class="arrow">→</div>
+  </a>
+
+</section>
+
+<footer>
+  <span>ragfarm — David Kubicek</span>
+  <span class="sep">·</span>
+  <span><a href="https://www.eywo.cz/" target="_blank" rel="noopener" style="color:var(--dim)">Eywo</a> — trusted partner in enterprise IT</span>
+  <span class="sep">·</span>
+  <span>on-prem · self-hosted · air-gap-ready</span>
+  <span class="sep">·</span>
+  <a href="drawio-editor.html" target="_blank" rel="noopener" style="color:var(--dim)">Draw.io editor</a>
+</footer>
+
+</body>
+</html>
