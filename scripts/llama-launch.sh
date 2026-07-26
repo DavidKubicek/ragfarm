@@ -32,7 +32,7 @@ if [ -n "${LLM_GGUF_MMPROJ:-}" ]; then
 fi
 ARGS+=(
   --host 127.0.0.1 --port 8080 -ngl 999 -c 8192 --context-shift --keep 3072 --jinja
-  --seed 42 --temperature 0.6 -fa -v --mlock --mmap --alias "$ALIAS"
+  --seed 42 --temperature 0.6 -fa on -v --mlock --mmap --alias "$ALIAS"
 )
 
 if [ -n "${LLAMA_LAUNCH_DRY_RUN:-}" ]; then
