@@ -83,6 +83,123 @@ measured numbers that justify it.
 
 ![Architecture Diagram](./assets/ragfarm_query_time_retrieval_path.png)
 
+## Working chat examples (verified in OWUI)
+
+Ten screenshots below are all from the deployed Open WebUI, driving the text-tuned
+Qwen2.5-7B preset (`ragfarm (corpus RAG + infra)`) on this exact stack. Every
+question was answered live — no editing. They exist here as (a) proof the current
+system does what the docs describe, and (b) the source of truth for the
+prompt-by-prompt commentary in [`docs/prompts.md`](docs/prompts.md).
+
+### 1. Firewall rules for a specific host (RAG → structured table)
+
+**Prompt:** `Jaká jsou FW pravidla pro host leadb229p.lea.piz?`
+
+![FW rules table for leadb229p.lea.piz — 6 rows, every column present](./assets/ex-01-fw-rules-table.png)
+
+Model calls `search_corpus`, gets 6 firewall-rule rows back, renders them as a
+markdown table with every column (Source/Destination Network Address(es) and
+Name(s), Destination Port(s), Protocol) — no dropped fields. Ends with a
+one-line source citation identifying the .xlsx it came from.
+
+### 2. Contacts for the EPC project team (RAG → per-person structured list)
+
+**Prompt:** `Dej mi kontakty na projektove vedeni v EPC.`
+
+![EPC project-lead contacts — 6 people with Firma/Role/Tel/E-mail each](./assets/ex-02-epc-contacts.png)
+
+Six people, each rendered as Firma / Role/oblast / Tel / E-mail. Phone numbers
+appear where present in source; the two people whose corpus row lacks a phone
+number simply don't get the field (no hallucination).
+
+### 3. Deep host lookup — 19 fields for one server (RAG → keyed detail view)
+
+**Prompt:** `Co vis o hostu acclcass1?`
+
+![19-field detail sheet for host acclcass1 including all IPs, VLANs, storage sizes](./assets/ex-03-host-acclcass1-19fields.png)
+
+Prostředí, OS, Virtualizace, Storage, vCPU, RAM, HDD, Support, T-S Hostname/IP/Netmask,
+SA Hostname/domain/IP/Netmask/VLAN ID, Storage OS+App/Data, filesystem, UID — all
+recovered from the source spreadsheet's row for this host, verbatim.
+
+### 4. Where credentials live (RAG + procedural answer)
+
+**Prompt:** `Kde ukládáme hesla pro EPC?`
+
+![NordPass procedure explanation with RDP User record pointer](./assets/ex-04-passwords-nordpass.png)
+
+Answers where (NordPass), which record name to look for ("RDP User"), and how
+that password fits into the RDP-to-terminal-server workflow.
+
+### 5. Documentation Git repository (RAG → exact URL)
+
+**Prompt:** `Kde máme uložené GIT repo s dokumentací?`
+
+![Azure DevOps URL for sa-hosting docs repository](./assets/ex-05-git-repo-devops.png)
+
+Exact repository URL retrieved verbatim from the corpus.
+
+### 6. Access flow from ŠA into EPC (RAG → 6-way procedural breakdown)
+
+**Prompt:** `Jak se přihlásím ze ŠA do EPC?`
+
+![Six numbered login paths — SSH direct, RDP, terminal servers, GUI, reverse proxy, CLI](./assets/ex-06-login-sa-to-epc.png)
+
+Six numbered login methods (SSH direct, RDP direct, via terminal servers, GUI,
+reverse proxy, CLI), each with the exact hostnames, IPs, credentials source, and
+pointers back to the source spreadsheets (`EPC25_VMs_config.xlsx`,
+`SA_Hosting_infra_VMs.xlsx`).
+
+### 7. Tool discipline: time query, out-of-corpus refusal, gated reboot
+
+**Prompts** (multi-turn):
+`Rebootuj host node-03.` · `Kolik je hodin?` · `Kdo je prezident USA?` · `Rebootuj host node-03.`
+
+![Tool-driven multi-turn: reboot_host, get_current_timestamp, honest out-of-corpus miss, reboot again](./assets/ex-07-tools-multi-turn.png)
+
+Four turns in one image. Reboot fires the `reboot_host` tool (returns success
+with live-migration report of `sftp-gw`). Time query fires
+`get_current_timestamp`. **"Who is the president of the USA?"** correctly returns
+a graceful miss (`V dokumentu není zmíněn žádný prezident USA`) instead of
+hallucinating a name — this is the target behavior for anything outside the
+corpus. Fourth turn reboots the same host again, cleanly.
+
+### 8. Diagram generation — dependency tree from a natural-language sentence
+
+**Prompt:** `Vygeneruj stromový diagram slovních vazeb ve větě: "Once upon a time there was a very little dog called Steven who owned a nice little yellow car".`
+
+![Mermaid dependency tree — dog is the hub with a, very, little as children; branching, not linear](./assets/ex-08-mermaid-sentence-tree.png)
+
+Mermaid syntax rendered inline in-chat by OWUI as an interactive SVG. Notice
+this is a real dependency tree, not a linear word chain: `dog` is a hub with
+`a`/`very`/`little`/`called Steven` branching off; `owned` hangs from `who`; the
+second `a` is its own hub for `car`. This shape is what took several rounds of
+system-prompt tuning to reach reliably.
+
+### 9. Code generation with in-chat execution
+
+**Prompt:** `Vygeneruj mi kód pro quicksort a otestuj ho spuštěním nad malým polem náhodných řetězců. Prezentuj kód a výsledné pořadí tříděného pole po běhu sortu.`
+
+![Quicksort Python code + execute_code tool run + sorted-string data grid](./assets/ex-09-quicksort-code-exec.png)
+
+Model writes a complete quicksort in Python, OWUI's built-in code interpreter
+runs it, and the sorted output appears inline as a data grid. Same
+sampling-deterministic path is used for `RULE 5` in the system prompt (write →
+execute → report + benchmark).
+
+Where the source images should live (drop with these exact names — the paths above are already wired):
+```
+assets/ex-01-fw-rules-table.png
+assets/ex-02-epc-contacts.png
+assets/ex-03-host-acclcass1-19fields.png
+assets/ex-04-passwords-nordpass.png
+assets/ex-05-git-repo-devops.png
+assets/ex-06-login-sa-to-epc.png
+assets/ex-07-tools-multi-turn.png
+assets/ex-08-mermaid-sentence-tree.png
+assets/ex-09-quicksort-code-exec.png
+```
+
 ## Network / proxy
 Outbound build traffic (PyPI, HuggingFace, container builds) honors a proxy via
 repo-root `.env` (gitignored, host-only — copy `.env.example`). Set `HTTP_PROXY`,

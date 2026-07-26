@@ -105,6 +105,11 @@ services:
     network_mode: host
     environment:
       <<: *proxy_env
+      # CONNECTION_TIMEOUT is used as the SSE-read timeout for MCP subprocess calls
+      # (mcpo/main.py: `timeout = self.connection_timeout or 900`). Set explicitly so
+      # a slow tool call — RAG rerank on a hot corpus, placement lookup with cold OpenNebula
+      # — has room without hitting the aiohttp deadline layered above from OWUI.
+      CONNECTION_TIMEOUT: "600"
     volumes:
       - ../services/mcp-gateway/mcpo-config.json:/config.json:ro
     command: ["--host", "127.0.0.1", "--port", "8000", "--config", "/config.json"]
@@ -152,6 +157,15 @@ services:
       OPENAI_API_KEY: sk-no-auth-local    # llama-server ignores auth; placeholder keeps OWUI happy
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
+      # Prompt-round timeout ceilings. OWUI's built-in default for AIOHTTP_CLIENT_TIMEOUT
+      # (the one used for /v1/chat/completions and outbound tool calls) is 300 s; we push
+      # it to 600 s so a Thinking-model long OCR turn or a deep RAG round can't hit the
+      # aiohttp deadline mid-generation. AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER inherits this
+      # unless set explicitly. Board demo has ~40 s vision OCR and ~150-200 s
+      # Farsi-with-translation prompts — 600 s leaves comfortable headroom for the
+      # dGPU-projected times too (they'll shrink 6-9x, so this stays over-sized).
+      AIOHTTP_CLIENT_TIMEOUT: "600"
+      AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER: "600"
       # IFRAME_CSP relaxes the HTML-preview iframe's Content-Security-Policy just
       # enough to let the vision preset's draw.io template load the local drawio
       # webapp (127.0.0.1 :80, i.e. no explicit port). Whitelist covers script,

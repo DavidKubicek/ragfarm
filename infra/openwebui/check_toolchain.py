@@ -261,7 +261,7 @@ def _run_loop(tools, canned, user, max_steps=6):
     for _ in range(max_steps):
         body = {"model": "qwen2.5-7b-instruct", "messages": msgs, "tools": tools,
                 "tool_choice": "auto", "temperature": 0, "top_k": 1, "seed": 42}
-        d = requests.post(f"{LLAMA}/v1/chat/completions", json=body, timeout=180).json()
+        d = requests.post(f"{LLAMA}/v1/chat/completions", json=body, timeout=300).json()
         m = d["choices"][0]["message"]
         tcs = m.get("tool_calls")
         if not tcs:

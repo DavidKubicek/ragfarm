@@ -167,7 +167,7 @@ def load_tools():
 # Tool execution (real)
 # --------------------------------------------------------------------------- #
 def _mcpo_call(mount, path, args):
-    r = requests.post(f"{MCPO_URL}/{mount}{path}", json=args, timeout=180)
+    r = requests.post(f"{MCPO_URL}/{mount}{path}", json=args, timeout=300)
     r.raise_for_status()
     return r.json()
 

@@ -122,7 +122,7 @@ def trace(prompt: str, tools: list, system: str | None, rounds: int):
 
     for r in range(1, rounds + 1):
         body = {"model": MODEL, "messages": msgs, "tools": tools, "tool_choice": "auto", **DET}
-        resp = requests.post(f"{LLM_URL}/v1/chat/completions", json=body, timeout=180)
+        resp = requests.post(f"{LLM_URL}/v1/chat/completions", json=body, timeout=300)
         resp.raise_for_status()
         msg = resp.json()["choices"][0]["message"]
         calls = msg.get("tool_calls") or []

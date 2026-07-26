@@ -71,7 +71,7 @@ mcp = FastMCP("rag-retrieval", host=HOST, port=PORT)
 
 def _embed_query(text: str) -> tuple[list[float], qm.SparseVector]:
     """Embed one query string -> (dense vector, sparse vector) via the embedder."""
-    r = requests.post(EMBED, json={"input": [text], "kind": "query"}, timeout=120)
+    r = requests.post(EMBED, json={"input": [text], "kind": "query"}, timeout=300)
     r.raise_for_status()
     d = r.json()
     dense = d["dense"][0]
@@ -97,7 +97,7 @@ def _rerank(query: str, cands: list, k: int, min_score: float) -> list[tuple]:
         return []
     docs = [(p.payload or {}).get("text_clean") or (p.payload or {}).get("text") or ""
             for p in cands]
-    r = requests.post(RERANK_EP, json={"query": query, "documents": docs}, timeout=120)
+    r = requests.post(RERANK_EP, json={"query": query, "documents": docs}, timeout=300)
     r.raise_for_status()
     # llama.cpp returns [{"index": i, "relevance_score": <raw logit>}, ...]. Sigmoid
     # the logit to the [0,1] contract (identical to FlagReranker normalize=True) and
