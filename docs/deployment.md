@@ -239,15 +239,38 @@ units read it on (re)start. What you must do after a swap depends on which model
 
 ## Open WebUI configuration (reproducible, not hand-clicked)
 OWUI stores config in its `openwebui_data` volume. Recreate it with
-`infra/openwebui/setup_openwebui.py` (idempotent):
-- **Tool server** `TOOL_SERVER_CONNECTIONS` → OpenAPI at **`http://127.0.0.1:8000/rag`**
-  (`path=openapi.json`, `auth_type=none`) → appears as tool id **`server:0`**.
-- **Model preset** `ragfarm (corpus RAG)`: base `qwen2.5-7b-instruct` + `rag` tool
-  pre-attached (`meta.toolIds`) + `params.function_calling=native` + a **grounding
-  system prompt**. The grounding prompt is load-bearing: without it the 7B answers
-  generic prose even when the exact chunk was retrieved.
+`infra/openwebui/setup_openwebui.py` (idempotent) — this pushes TWO presets in
+one pass (text + vision, see ADR-0009 and the "Vision engine" section below):
+- **Tool servers** `TOOL_SERVER_CONNECTIONS` → `/rag` (`server:0`) + `/placement`
+  (`server:1`), both `path=openapi.json`, `auth_type=none`.
+- **Preset `ragfarm`** (text): base `qwen2.5-7b-instruct` + rag/placement/reboot_guarded
+  attached (`meta.toolIds`) + `params.function_calling=native` + greedy sampler
+  (`temp=0, top_k=1, seed=42`) + the RULE-1..5 grounding prompt. Loadbearing:
+  without it the 7B answers generic prose even when the exact chunk was retrieved.
+- **Preset `ragfarm-vision`** (VL): base auto-detected via `/v1/models` (first
+  entry with capability `multimodal`, overridable via `VISION_BASE_MODEL_ID`),
+  non-greedy sampler (`temp=0.6`, `top_k/top_p/min_p/seed` DROPPED so llama.cpp
+  defaults apply — required by Qwen3-VL Thinking) + vision + file-upload
+  capabilities on + a RULE-1..6 prompt that adds image-input rules and a draw.io
+  HTML template pointing at the local viewer (`127.0.0.1:8091`, see
+  `drawio-viewer` service in `infra/compose.yaml`).
+- Capabilities matrix (both presets): file_context, file_upload, web_search,
+  code_interpreter, citations, status_updates, usage, builtin_tools all ON;
+  image_generation, terminal OFF; vision only on VL preset.
+- Default features (per-chat pre-selected): web_search + code_interpreter.
+- Builtin tools: everything ON except knowledge and calendar (OWUI opt-out
+  convention — absence = enabled).
 - OpenAI endpoint: `OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1` (compose env).
 - Open WebUI's built-in document RAG is deliberately unused for the corpus (Option B).
+
+Run it (admin token, or email + password on the CLI):
+```bash
+OWUI_URL=http://127.0.0.1:3000 OWUI_TOKEN=<admin JWT> \
+  .venv/bin/python infra/openwebui/setup_openwebui.py
+```
+Only one llama-server model is loaded at a time — the preset whose
+`base_model_id` matches the wrapper's `--alias` is the one that actually works
+right now; the other stays as stored config waiting for the next model swap.
 
 ## Verifying the toolchain
 `infra/openwebui/check_toolchain.py` — exit 0 full pass, 2 needs interactive
@@ -305,3 +328,177 @@ Qdrant) is HW-agnostic and should NOT be re-architected. Concrete changes:
   mcpo-config or registration changes needed.
 - **Corpus**: `CORPUS_PATH` and the Qdrant `corpus` collection (dense 1024 + sparse)
   are portable; re-run `services/ingester/ingester.py --recreate` against prod corpus.
+
+## Vision engine (Qwen3-VL family — ADR-0009)
+
+Two OWUI presets coexist; only one is *live* at a time (the one whose
+`base_model_id` matches the wrapper's `--alias`). To flip between text and
+vision, or between Instruct and Thinking variants, use `activate-llm.sh`:
+
+```bash
+scripts/activate-llm.sh --list                                 # what's on disk
+scripts/activate-llm.sh --dir qwen_qwen3-vl-8b-thinking-gguf   # switch to vision
+sudo systemctl restart ragfarm-llama                            # apply (~30-60 s to reload)
+```
+
+The wrapper (`scripts/llama-launch.sh`) auto-derives `--alias` from the model's
+directory name and conditionally adds `--mmproj` when the model dir contains a
+`*mmproj*.gguf` (vision models). No unit edits, no other flags to touch.
+
+### Live capabilities that Just Work
+
+The Qwen3-VL preset has already been verified end-to-end on this stack:
+- **OCR from image URL** — see the demo commands below. Auntie Anne's Indonesian
+  receipt from the openlm.ai example was OCR'd correctly (all prices, all
+  fields), at ~8 tok/s decode on the iGPU.
+- **Image description** — attach any image in OWUI chat; the model describes
+  content verbatim (RULE 4 of the vision prompt: no invention, verbatim OCR).
+- **Diagram scan → regenerate as mermaid or draw.io** — screenshot a hand-drawn
+  or existing diagram, ask "regenerate this as draw.io" (or "as mermaid").
+- **Prompt-modify-synthesize** — attach an image, ask "same structure but add a
+  reranker box between retrieval and generation". The model reads the input as
+  a graph, applies your edit, and re-emits in the chosen format.
+
+### Diagram rendering
+
+`ragfarm-vision`'s system prompt asks the user which format they want (never
+routes silently, never emits both):
+
+- **Mermaid** — the user says "mermaid". Rendered natively by OWUI as an SVG.
+- **draw.io** — the user says "draw.io" / "drawio" / "editable" / "interactive"
+  / "pan-zoom". The model emits a fenced ```html block wrapping the raw
+  `<mxfile>` XML plus a script tag pointing at `http://127.0.0.1:8091/viewer-static.min.js`
+  (the local `drawio-viewer` nginx container). OWUI's HTML preview iframe
+  loads it — pan/zoom/lightbox/layer toggle work in-chat.
+
+The IFRAME_CSP is set to allow scripts from `127.0.0.1:8091` only; nothing else
+opens up. The viewer's own external calls to `viewer.diagrams.net/styles` &
+`/shapes` may 404 on an offline demo box; the core rendering still works, only
+fancy stencil sets are missing.
+
+### Verified demo commands (no prep needed, run today)
+
+The tests below use the live stack as-is. Nothing to fetch, nothing to install.
+
+**Sanity: vision model loaded?**
+```bash
+curl -s 127.0.0.1:8080/v1/models | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["models"][0]["model"], d["models"][0].get("capabilities"))'
+# expect: qwen_qwen3-vl-8b-thinking ['completion', 'multimodal']
+```
+
+**OCR from a public image (via base64 to bypass llama-server's HTTPS-off build):**
+```bash
+.venv/bin/python - <<'PY'
+import base64, requests, time
+IMG = "https://ofasys-multimodal-wlcb-3-toshanghai.oss-cn-shanghai.aliyuncs.com/wpf272043/keepme/image/receipt.png"
+img = requests.get(IMG, timeout=30); img.raise_for_status()
+uri = f"data:{img.headers['content-type']};base64,{base64.b64encode(img.content).decode()}"
+t0 = time.time()
+r = requests.post("http://127.0.0.1:8080/v1/chat/completions", json={
+    "model": "qwen_qwen3-vl-8b-thinking",
+    "messages": [{"role":"user","content":[
+        {"type":"image_url","image_url":{"url":uri}},
+        {"type":"text","text":"Read all the text in the image."}]}],
+    "max_tokens": 512, "temperature": 0.6,
+}, timeout=120)
+print(f"HTTP {r.status_code}  {time.time()-t0:.1f}s")
+print(r.json()["choices"][0]["message"]["content"])
+PY
+```
+
+**In-UI vision demo (OWUI, admin@ragfarm.local):**
+1. Select model **`ragfarm-vision`** from the dropdown.
+2. Click the paperclip → upload any image (receipt, screenshot of a diagram,
+   photo of a whiteboard).
+3. Ask one of: "OCR everything in this image", "describe what you see",
+   "regenerate this diagram as mermaid" / "as draw.io".
+4. For a diagram request, add `/no_think` to the prompt if the Thinking trace
+   makes the wait too long (Qwen3 chat-template convention: strips the
+   `<think>...</think>` block for that turn).
+
+**Serve local test images to the model:** the same `drawio-viewer` nginx also
+serves anything under `infra/drawio-viewer/`. Drop a `.png` / `.pdf` there and
+reference `http://127.0.0.1:8091/<file>` in a prompt. Useful for a repeatable
+demo without leaning on external URLs.
+
+### /think vs /no_think (Qwen3 Thinking control)
+
+Qwen3 parses these tokens out of user messages (chat-template convention, NOT
+system-prompt rules):
+- **`/think`** — force the model to emit a `<think>...</think>` block before the
+  answer. Default for `*-Thinking-*` model variants.
+- **`/no_think`** — suppress the reasoning block for this turn. Runs a Thinking
+  model like an Instruct one; ~3-5× snappier answers, at the cost of the
+  reasoning quality on hard multi-step prompts.
+
+Practical demo advice: default (thinking on) for the first, hardest question of
+the day (RAG lookup, complex OCR); append `/no_think` for follow-ups, quick
+lookups, and diagram requests where the trace adds no value.
+
+## Debug & measurement (`tests/tracing/`)
+
+Standalone Python tools (no dependencies beyond `requests`) that answer *where
+did the time go* for any inference or chat turn. All safe to run against the
+live stack — read-only, no side effects.
+
+Every tool takes `--url http://127.0.0.1:8080` (or the equivalent flag) so
+they're portable across the swappable llama-server endpoint. Default endpoint
+in the code is `localhost:8001` — always pass `--url` explicitly.
+
+### The catalog
+
+| Tool | What it measures | When to use |
+|------|------------------|-------------|
+| `ragfarm_bench.py` | Basic prefill/decode tok/s + TTFT + E2E per prompt | Quick "is llama fast enough right now" check |
+| `ragfarm_bench_extended.py` | Full per-stage timings, absolute token+byte counts, context growth, CSV/JSON export | Regression tracking across commits or hardware swaps |
+| `ragfarm_bench_chatid.py` | Same, plus context-blowup detection per chat session | Find when a conversation starts overflowing context |
+| `chat_execution_tracer.py` | Chat session timeline: user→prefill→tool decision→tool exec→decision phase→generation, with orchestration-overhead % | Diagnose "chat feels slow" vs "LLM is slow" |
+| `ragfarm_tracer_simple.py` | One-shot telemetry query: which model is loaded, endpoint latencies | Sanity check before any deeper trace |
+| `ragfarm_integrated_tracer.py` | Combined engine telemetry + pipeline trace demo | Report generation for a whole pipeline |
+| `ragfarm_rag_tracer.py` | RAG candidate-pool evolution: Qdrant → RRF → reranker, per-stage tokens/latency | Debug retrieval quality regressions ("why didn't my chunk win?") |
+
+*(Not integrated: `ragfarm_http_tracer.py` — proxy-based, requires reconfiguring
+OWUI's LLM endpoint. Its only unique benefit is E2E prompt-answer wall time,
+which every other tool measures anyway.)*
+
+### Verified one-liners (run today)
+
+```bash
+# 1. What model is loaded and how fast does one prompt run?
+.venv/bin/python tests/tracing/ragfarm_tracer_simple.py query \
+    --generation localhost:8080 --reranker localhost:8081
+
+# 2. Baseline bench, one prompt, small max_tokens (fast)
+.venv/bin/python tests/tracing/ragfarm_bench.py \
+    --url http://127.0.0.1:8080 --prompt 1 --max-tokens 40
+
+# 3. Extended bench, 3 prompts with CSV export (regression file)
+.venv/bin/python tests/tracing/ragfarm_bench_extended.py \
+    --url http://127.0.0.1:8080 --prompt 3 --max-tokens 128 \
+    --csv bench_$(date +%s).csv
+
+# 4. Chat tracer demo (canned session; no LLM required)
+.venv/bin/python tests/tracing/chat_execution_tracer.py --demo
+# writes chat_trace_demo.json in cwd
+
+# 5. Real RAG pipeline trace for one query (endpoint is mcpo at :8000,
+#    which mounts rag under /rag/search_corpus — NOT direct rag-retrieval :8104)
+.venv/bin/python tests/tracing/ragfarm_rag_tracer.py trace \
+    --chat-id demo_$(date +%s) \
+    --query "FW pravidla pro host leadb229p.lea.piz" \
+    --rag-endpoint http://127.0.0.1:8000
+```
+
+### What "good" looks like on this iGPU (Qwen3-VL-8B-Thinking Q4_K_M, current baseline)
+
+| Metric | Now | Comment |
+|--------|-----|---------|
+| Decode | ~8-9 tok/s | LPDDR5x bandwidth-bound, both 7B and 8B land here |
+| Prefill | ~170 tok/s | The 2-order-of-magnitude speedup vs decode is expected |
+| Vision OCR (dense receipt) | ~40 s | 300+ output tokens at 8 tok/s |
+| Reranker turn | ~1.9 s | Since ADR-0008 moved it to GPU/Vulkan (was ~36 s on CPU) |
+| Tool overhead | ~15-25 % of chat turn | Higher with reboot_guarded modal, lower for pure RAG |
+
+Baseline numbers older docs cite (300 tok/s prefill, 1000 tok/s decode) came
+from a much lighter model; the current live setup is intentionally slower and
+smarter. Track deltas from this table, not from those.

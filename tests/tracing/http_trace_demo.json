@@ -1,0 +1,53 @@
+{
+  "session": {
+    "session_id": "demo_001",
+    "timestamp": "2026-07-25T02:55:25.501670",
+    "total_requests": 3,
+    "total_bytes": 4736,
+    "total_time_ms": 400.3
+  },
+  "requests": [
+    {
+      "seq": 1,
+      "timestamp_ms": 0,
+      "method": "POST",
+      "engine": "generation",
+      "endpoint": "localhost:8001",
+      "path": "/v1/completions",
+      "request_bytes": 256,
+      "response_bytes": 512,
+      "response_status": 200,
+      "latency_ms": 187.3,
+      "request_preview": "prompt: 'Jak se p\u0159ihl\u00e1s\u00edm do EPC?'",
+      "response_preview": "tokens generated, usage info..."
+    },
+    {
+      "seq": 2,
+      "timestamp_ms": 190,
+      "method": "POST",
+      "engine": "reranker",
+      "endpoint": "localhost:8002",
+      "path": "/v1/rerank",
+      "request_bytes": 2048,
+      "response_bytes": 256,
+      "response_status": 200,
+      "latency_ms": 67.8,
+      "request_preview": "query + 3 docs",
+      "response_preview": "relevance scores [0.95, 0.87, 0.62]"
+    },
+    {
+      "seq": 3,
+      "timestamp_ms": 260,
+      "method": "POST",
+      "engine": "generation",
+      "endpoint": "localhost:8001",
+      "path": "/v1/completions",
+      "request_bytes": 1024,
+      "response_bytes": 640,
+      "response_status": 200,
+      "latency_ms": 145.2,
+      "request_preview": "reranked context + query",
+      "response_preview": "final answer generated..."
+    }
+  ]
+}

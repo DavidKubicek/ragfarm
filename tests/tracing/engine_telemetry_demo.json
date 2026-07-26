@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-07-25T02:54:39.967557",
+  "telemetries": {
+    "generation": {
+      "engine_name": "generation",
+      "endpoint": "localhost:8001",
+      "model_id": "Qwen2.5-7B-Q4_K_M",
+      "is_healthy": true,
+      "response_time_ms": 2.34
+    },
+    "reranker": {
+      "engine_name": "reranker",
+      "endpoint": "localhost:8002",
+      "model_id": "BGE-M3",
+      "is_healthy": true,
+      "response_time_ms": 1.87
+    }
+  }
+}
