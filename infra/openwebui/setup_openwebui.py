@@ -225,9 +225,15 @@ VISION_GROUNDING_SYSTEM = (
     "of guessing. For OCR / receipt / form tasks, output the fields exactly as printed, keeping "
     "the original punctuation and number formatting.\n\n"
 
-    "RULE 5 — diagrams. Default: mermaid, fenced ```mermaid, one block, one caption sentence, "
-    "then stop; no tool call. For DRAW.IO / interactive / editable / pan-zoom diagrams, output "
-    "ONE fenced ```html block using EXACTLY this wrapper so Open WebUI renders it in-chat:\n"
+    "RULE 5 — diagrams. The user asks which format they want; you produce exactly that one, "
+    "never both. No tool call for diagram requests. The two supported formats:\n"
+    "\n"
+    "  a) Mermaid — when the user says \"mermaid\" (or the request is ambiguous, ask which). "
+    "Output ONE fenced ```mermaid block, then at most one caption sentence, then stop.\n"
+    "\n"
+    "  b) draw.io — when the user says \"draw.io\" / \"drawio\" / \"editable\" / \"interactive\" / "
+    "\"pan-zoom\". Output ONE fenced ```html block using EXACTLY this wrapper so Open WebUI "
+    "renders it in-chat:\n"
     "```html\n"
     "<!DOCTYPE html>\n"
     "<html><head><meta charset=\"utf-8\">\n"
@@ -239,12 +245,12 @@ VISION_GROUNDING_SYSTEM = (
     "  <mxfile>... your syntactically valid draw.io XML here, RAW (no escaping, no JSON) ...</mxfile>\n"
     "</xml>\n"
     "</div>\n"
-    "<script type=\"text/javascript\" src=\"https://viewer.diagrams.net/js/viewer-static.min.js\"></script>\n"
+    "<script type=\"text/javascript\" src=\"http://127.0.0.1:8091/viewer-static.min.js\"></script>\n"
     "</body></html>\n"
     "```\n"
     "The XML must start with `<mxfile>` and end with `</mxfile>`, live directly inside `<xml>` "
-    "unescaped, and be a valid draw.io document. One ```html block only, then stop — never a "
-    "second block, never a mermaid fallback next to it.\n\n"
+    "unescaped, and be a valid draw.io document. One block, one caption, then stop — never a "
+    "second block, never the other format next to it.\n\n"
 
     "RULE 6 — coding. Every time you write or change code, do all of this automatically:\n"
     "  1. Output the full current code first, in a fenced code block.\n"
@@ -266,9 +272,8 @@ VISION_MODEL_PARAMS = {
     # sampler-shape knobs re-introduces the determinism trap this preset is meant
     # to avoid.
     "temperature": 0.6,
-    # client-side agent behavior (ctx here is 8192 per the wrapper's -c 8192,
-    # so compact well below that to leave room for the current turn).
-    "compact_token_threshold": 6144,
+    # client-side agent behavior — matches text preset's 24000 (wrapper ctx 32768).
+    "compact_token_threshold": 24000,
     "stream_response": True,
     "stream_delta_chunk_size": 1,
     # keep weights resident
@@ -337,19 +342,30 @@ def main() -> None:
     #    any given moment (see module docstring).
     tool_ids = server_ids + ["reboot_guarded"]
 
-    # Capability matrix per preset — the vision preset flips `vision` and
-    # `file_upload` ON so OWUI actually accepts image attachments; everything
-    # else mirrors the text preset so RAG citations, code interpreter, etc. work
-    # identically across engines. Re-running this script MUST NOT silently
-    # disable code_interpreter (the coding rule depends on it), so we pin the
-    # whole set here rather than letting it default.
+    # Capability matrix per preset — matches Workspace -> Model Advanced settings
+    # verbatim (screenshot committed 2026-07-26). Only `vision` differs between
+    # presets (VL model only); file_upload is on for BOTH so both engines can
+    # accept files, image_generation stays OFF (OWUI's built-in image gen depends
+    # on an external DALL-E/SD backend we don't run). Re-running this script MUST
+    # NOT silently drop code_interpreter or usage (RULE 6 + tests/tracing depend
+    # on them), so we pin the whole set here rather than let anything default.
     caps_text = {
-        "file_context": True, "vision": False, "file_upload": False,
-        "web_search": False, "image_generation": True, "code_interpreter": True,
-        "terminal": False, "citations": True, "status_updates": False,
+        "file_context": True, "vision": False, "file_upload": True,
+        "web_search": True, "image_generation": False, "code_interpreter": True,
+        "terminal": False, "citations": True, "status_updates": True,
         "usage": True, "builtin_tools": True,
     }
-    caps_vision = {**caps_text, "vision": True, "file_upload": True}
+    caps_vision = {**caps_text, "vision": True}
+
+    # Default Features (defaultFeatureIds) — which per-chat feature toggles are
+    # pre-selected when the user starts a new conversation. Web Search + Code
+    # Interpreter both on so the demo hands don't need to click these each time.
+    default_features = ["web_search", "code_interpreter"]
+
+    # Builtin Tools (builtinTools) — OWUI's opt-out convention: only false-flagged
+    # keys are persisted; absent keys default to ENABLED. Per screenshot: everything
+    # in the row is ON except Knowledge Base and Calendar.
+    builtin_tools = {"knowledge": False, "calendar": False}
 
     vision_base = _detect_vision_model_id(default="qwen_qwen3-vl-8b-thinking")
 
@@ -381,6 +397,8 @@ def main() -> None:
                 "description": p["description"],
                 "toolIds": tool_ids,
                 "capabilities": p["capabilities"],
+                "defaultFeatureIds": default_features,
+                "builtinTools": builtin_tools,
             },
             "params": p["params"],
             "access_grants": [],

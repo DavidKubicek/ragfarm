@@ -11,3 +11,6 @@ logs/
 .venv-rocm/
 services/ingester/manifest.db*
 services/ingester/known-good.constraints.txt
+
+# draw.io viewer JS (4MB blob, re-fetch from viewer.diagrams.net)
+infra/drawio-viewer/viewer-static.min.js

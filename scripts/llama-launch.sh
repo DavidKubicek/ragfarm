@@ -31,7 +31,7 @@ if [ -n "${LLM_GGUF_MMPROJ:-}" ]; then
   ARGS+=(--mmproj "$LLM_GGUF_MMPROJ")
 fi
 ARGS+=(
-  --host 127.0.0.1 --port 8080 -ngl 999 -c 8192 --context-shift --keep 3072 --jinja
+  --host 127.0.0.1 --port 8080 -ngl 999 -c 32768 --context-shift --keep 3072 --jinja
   --seed 42 --temperature 0.6 -fa on -v --mlock --mmap --alias "$ALIAS"
 )
 
