@@ -365,21 +365,25 @@ def main() -> None:
     # on them), so we pin the whole set here rather than let anything default.
     caps_text = {
         "file_context": True, "vision": False, "file_upload": True,
-        "web_search": True, "image_generation": False, "code_interpreter": True,
+        "web_search": False, "image_generation": False, "code_interpreter": True,
         "terminal": False, "citations": True, "status_updates": True,
         "usage": True, "builtin_tools": True,
     }
     caps_vision = {**caps_text, "vision": True}
 
-    # Default Features (defaultFeatureIds) — which per-chat feature toggles are
-    # pre-selected when the user starts a new conversation. Web Search + Code
-    # Interpreter both on so the demo hands don't need to click these each time.
-    default_features = ["web_search", "code_interpreter"]
+    # Default Features (defaultFeatureIds) — per-chat toggles pre-selected in new
+    # conversations. Code interpreter only — web_search removed (its capability is
+    # off across both presets, and pre-checking it just presents a broken affordance).
+    default_features = ["code_interpreter"]
 
     # Builtin Tools (builtinTools) — OWUI's opt-out convention: only false-flagged
-    # keys are persisted; absent keys default to ENABLED. Per screenshot: everything
-    # in the row is ON except Knowledge Base and Calendar.
-    builtin_tools = {"knowledge": False, "calendar": False}
+    # keys are persisted; absent keys default to ENABLED. Automations / tasks /
+    # web_search are explicitly OFF because they encourage the Thinking model to
+    # invent multi-step iteration where the single-shot RAG call was already
+    # complete (observed on the ragfarm-vision preset — multi-loop tool traps).
+    # Knowledge and Calendar OFF because we don't run those backends.
+    builtin_tools = {"knowledge": False, "calendar": False,
+                     "automations": False, "tasks": False, "web_search": False}
 
     vision_base = _detect_vision_model_id(default="qwen_qwen3-vl-8b-thinking")
 

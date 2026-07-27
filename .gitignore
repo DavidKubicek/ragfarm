@@ -11,7 +11,7 @@ logs/
 .venv-rocm/
 services/ingester/manifest.db*
 services/ingester/known-good.constraints.txt
-tests/qwen3-vl_prompt-results.json
+tests/*.json
 
 # draw.io viewer JS (4MB blob, re-fetch from viewer.diagrams.net)
 

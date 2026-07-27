@@ -181,11 +181,15 @@
     <div class="arrow">→</div>
   </a>
 
-  <a class="row active" href="http://127.0.0.1:3000" target="_blank" rel="noopener">
+  <a class="row active" id="link3000" target="_blank" rel="noopener">
     <div class="num">04</div>
     <div class="title">Custom original on-prem AI</div>
     <div class="arrow">→</div>
   </a>
+  <script>
+    document.getElementById("link3000").href =
+      window.location.protocol + "//" + window.location.hostname + ":3000";
+  </script>
 
 </section>
 
