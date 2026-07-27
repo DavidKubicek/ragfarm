@@ -109,7 +109,7 @@ services:
       # (mcpo/main.py: `timeout = self.connection_timeout or 900`). Set explicitly so
       # a slow tool call — RAG rerank on a hot corpus, placement lookup with cold OpenNebula
       # — has room without hitting the aiohttp deadline layered above from OWUI.
-      CONNECTION_TIMEOUT: "600"
+      CONNECTION_TIMEOUT: "1200"
     volumes:
       - ../services/mcp-gateway/mcpo-config.json:/config.json:ro
     command: ["--host", "127.0.0.1", "--port", "8000", "--config", "/config.json"]
@@ -169,8 +169,8 @@ services:
       # unless set explicitly. Board demo has ~40 s vision OCR and ~150-200 s
       # Farsi-with-translation prompts — 600 s leaves comfortable headroom for the
       # dGPU-projected times too (they'll shrink 6-9x, so this stays over-sized).
-      AIOHTTP_CLIENT_TIMEOUT: "600"
-      AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER: "600"
+      AIOHTTP_CLIENT_TIMEOUT: "1200"
+      AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER: "1200"
       # IFRAME_CSP relaxes the HTML-preview iframe's Content-Security-Policy just
       # enough to let the vision preset's draw.io template load the local drawio
       # webapp (127.0.0.1 :80, i.e. no explicit port). Whitelist covers script,
