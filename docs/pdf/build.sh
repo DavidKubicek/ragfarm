@@ -97,11 +97,26 @@ EOF
   # Rewrite relative image paths so they resolve from the master's temp cwd.
   # Simplest correct fix: convert any ./assets/... or docs/... reference to an
   # absolute path rooted at $REPO_ROOT.
+  #
+  # Non-markdown chapters (.env.example — an .env config file) are wrapped in a
+  # bash code fence, because their `# ==============` section-divider lines would
+  # otherwise be parsed by GFM as H1 headings and pollute the TOC.
   python3 - "$REPO_ROOT" "$path" >> "$MASTER" <<'PY'
-import re, sys, os, pathlib
+import re, sys, pathlib
 repo, path = sys.argv[1], sys.argv[2]
 base = pathlib.Path(path).parent
 text = pathlib.Path(path).read_text()
+name = pathlib.Path(path).name
+
+# Non-markdown files: dump inside a code fence to protect the TOC + syntax.
+# .env.example is bash-flavored (VAR=value + shell-style comments).
+if name == ".env.example":
+    sys.stdout.write("Reproducible source-of-truth for every environment variable in the ragfarm stack. Copy to `.env` on the host and set the ones you need — everything else stays commented at safe defaults.\n\n")
+    sys.stdout.write("```bash\n")
+    sys.stdout.write(text)
+    sys.stdout.write("\n```\n")
+    sys.exit(0)
+
 def fix(m):
     alt, url = m.group(1), m.group(2)
     if url.startswith(("http://", "https://", "/")):
