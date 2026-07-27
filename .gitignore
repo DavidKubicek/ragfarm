@@ -22,4 +22,6 @@ tests/qwen3-vl_prompt-results.json
 infra/drawio-viewer/*
 !infra/drawio-viewer/index.html
 !infra/drawio-viewer/drawio-editor.html
+!infra/drawio-viewer/fixtures/
+!infra/drawio-viewer/fixtures/.keep
 
