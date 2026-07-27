@@ -134,6 +134,11 @@ services:
     ports: ["0.0.0.0:80:80"]
     volumes:
       - ../infra/drawio-viewer:/usr/share/nginx/html:ro
+      # Serve tests/fixtures/ under /fixtures/ so vision-demo prompts can
+      # reference stable http://<host>/fixtures/<file> URLs (board can download
+      # the exact input, prompt reproduces exactly). Read-only, LAN-reachable
+      # via the same 0.0.0.0:80 bind.
+      - ../tests/fixtures:/usr/share/nginx/html/fixtures:ro
 
   # open-webui — the agent/UI layer (ADR-0003). Drives the swappable OpenAI
   # endpoint (llama-server on 127.0.0.1:8080) and calls MCP tools via the mcpo
