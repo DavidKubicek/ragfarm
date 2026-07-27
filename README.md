@@ -97,7 +97,7 @@ measured numbers that justify it.
 
 ## Working chat examples (verified in OWUI)
 
-Ten screenshots below are all from the deployed Open WebUI, driving the text-tuned
+Nine screenshots below are all from the deployed Open WebUI, driving the text-tuned
 Qwen2.5-7B preset (`ragfarm (corpus RAG + infra)`) on this exact stack. Every
 question was answered live — no editing. They exist here as (a) proof the current
 system does what the docs describe, and (b) the source of truth for the
@@ -198,19 +198,6 @@ Model writes a complete quicksort in Python, OWUI's built-in code interpreter
 runs it, and the sorted output appears inline as a data grid. Same
 sampling-deterministic path is used for `RULE 5` in the system prompt (write →
 execute → report + benchmark).
-
-Where the source images should live (drop with these exact names — the paths above are already wired):
-```
-assets/ex-01-fw-rules-table.png
-assets/ex-02-epc-contacts.png
-assets/ex-03-host-acclcass1-19fields.png
-assets/ex-04-passwords-nordpass.png
-assets/ex-05-git-repo-devops.png
-assets/ex-06-login-sa-to-epc.png
-assets/ex-07-tools-multi-turn.png
-assets/ex-08-mermaid-sentence-tree.png
-assets/ex-09-quicksort-code-exec.png
-```
 
 ## Network / proxy
 Outbound build traffic (PyPI, HuggingFace, container builds) honors a proxy via
