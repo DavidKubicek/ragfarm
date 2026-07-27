@@ -86,10 +86,15 @@ for entry in "${CHAPTERS[@]}"; do
     continue
   fi
   echo "  +  Chapter $label  ($path, $(wc -c <"$path") bytes)"
-  # Chapter divider — clickable in the TOC
+  # Chapter divider. \newpage is LaTeX and gets passed through as literal
+  # text by pandoc's GFM reader (visible as raw "\newpage" in the PDF).
+  # A raw typst block with #pagebreak() is the correct portable idiom; requires
+  # --from=gfm+raw_attribute on the pandoc call below.
   cat >> "$MASTER" <<EOF
 
-\\newpage
+\`\`\`{=typst}
+#pagebreak()
+\`\`\`
 
 # Chapter $label
 
@@ -135,7 +140,7 @@ done
 echo "  ==> master $(wc -l < "$MASTER") lines, $(wc -c < "$MASTER") bytes"
 echo "  ==> pandoc -> typst -> pdf"
 pandoc "$MASTER" \
-  --from=gfm+yaml_metadata_block \
+  --from=gfm+yaml_metadata_block+raw_attribute \
   --to=pdf \
   --pdf-engine=typst \
   --toc --toc-depth=2 \

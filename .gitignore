@@ -25,3 +25,6 @@ infra/drawio-viewer/*
 !infra/drawio-viewer/fixtures/
 !infra/drawio-viewer/fixtures/.keep
 
+
+# harness reference JSONs — untracked
+tests/qwen3-vl_*_prompt-results.json
