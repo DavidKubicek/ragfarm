@@ -385,7 +385,18 @@ def main() -> None:
         "terminal": False, "citations": True, "status_updates": True,
         "usage": True, "builtin_tools": True,
     }
-    caps_vision = {**caps_text, "vision": True}
+    # Vision preset overrides:
+    #   vision: True   — obviously, this is the point
+    #   file_context: False — OWUI's file_context path prepends `<attached_files>
+    #     <file url="..." name="..."/></attached_files>` as TEXT to the user
+    #     message, IN ADDITION to routing the image bytes through the vision
+    #     encoder. On Qwen3-VL-Thinking that dual signal caused a metacognitive
+    #     loop ("is the user showing me an XML file description or the real image?
+    #     Wait, actually, let me re-check…") — observed 2026-07-27, model stuck
+    #     in <think> re-debating whether it's looking at text or vision tokens.
+    #     Turning file_context off makes image uploads vision-only. Non-image
+    #     files (PDF/DOCX) belong on the text preset anyway.
+    caps_vision = {**caps_text, "vision": True, "file_context": False}
 
     # Default Features (defaultFeatureIds) — per-chat toggles pre-selected in new
     # conversations. Code interpreter only — web_search removed (its capability is
