@@ -286,6 +286,14 @@ VISION_MODEL_PARAMS = {
     # sampler-shape knobs re-introduces the determinism trap this preset is meant
     # to avoid.
     "temperature": 0.6,
+    # Response ceiling. Without this the OWUI front-end applies its modest built-in
+    # default (~2-4k), which starves a Thinking-model turn — the <think> block burns
+    # through the budget before the tool_call is ever emitted (observed 2026-07-27:
+    # contacts prompt cut off mid-sentence inside reasoning, never called the tool).
+    # 16k leaves comfortable room for reasoning + tool call + full markdown-table answer,
+    # while staying half of the wrapper's -c 32768 context so multi-turn history has room.
+    # (OpenAI-compat key; llama.cpp honors it directly, no num_predict remap needed.)
+    "max_tokens": 16384,
     # client-side agent behavior — matches text preset's 24000 (wrapper ctx 32768).
     "compact_token_threshold": 24000,
     "stream_response": True,
