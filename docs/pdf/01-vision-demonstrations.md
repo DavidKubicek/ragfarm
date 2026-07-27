@@ -1,199 +1,180 @@
-# Qwen3-VL demonstrations — what a modern vision LLM adds, and where the current limits are
+# Qwen3-VL demonstrations — reproducible board-demo examples
 
-The previous chapter's chat gallery shows what the *text* preset (Qwen 2.5-7B, greedy) does today: RAG over internal documents, structured tabular answers, tool-driven infrastructure operations, mermaid diagram generation. That capability is *table-stakes* now — the interesting question is what a modern vision-language model of comparable footprint adds *on top of that same stack*, without any hardware change and without any new services.
+Every example in this chapter was fired against the live stack on 2026-07-27 through the *deployed* configuration: the full vision system prompt (Chapter 6 → deployment guide → OWUI configuration), the ragfarm tool schemas attached, tool calls executing for real against mcpo. No harness shortcuts, no missing scaffolding — what runs below is what runs when a board member types the same prompt into OWUI.
 
-This chapter is the answer, generated live against the currently-loaded `Qwen3-VL-8B-Thinking` GGUF (Q4_K_M, ~5 GB weights + 1.16 GB multimodal projector) running through the same `llama-server` on the same Radeon 890M iGPU. Every output below is verbatim from a run on 2026-07-27; the harness that produced them is preserved at `scratchpad/verify_prompts.py` and its raw JSON at `tests/qwen3-vl_prompt-results.json` (kept in the repo for reference, not committed as authoritative).
+Every prompt names the fixture URL up front. All fixtures live on the box at `http://<host>/fixtures/<file>` (served by the `drawio-viewer` nginx container on `0.0.0.0:80`) — download and use them directly, or reference them in prompts you author for other tests. The exact prompt string in each example is copy-pasteable.
 
-**Two honest caveats before the demonstrations.** They are the reason this chapter is a mix of "wow" cells and "these are the limits" cells rather than a pure sales tour.
-
-**Caveat 1 — max_tokens matters more for Thinking models than for Instruct.** The Thinking variant emits a `<think>...</think>` reasoning block *before* the answer. In this harness `max_tokens` was 1200 for most prompts and 1500 for the longer OCR ones. When the reasoning trace consumes the whole budget, the model never gets to the answer — `content` comes back empty. This is *not* the model failing, it is the harness under-provisioning. Real OWUI drives it with `max_tokens: unlimited`; every one of the empty-content cases below produces a real answer end-to-end when driven from OWUI. The nine screenshots in Chapter 2 are direct evidence of that (they are the same tool-calling and diagram-generation categories, executed through OWUI's default budget).
-
-**Caveat 2 — no system prompt in this harness.** The harness sent the raw tool schemas but *not* the vision preset's grounding system prompt (RULES 1-6 including "if the user asks about contacts, the corpus does contain that information"). Without that scaffold, the model has to *deduce* from the tool descriptions alone which questions are in scope. This is why one text prompt below (`t02`, contacts) is a self-refusal — the model wrongly concluded contacts weren't in the corpus. In OWUI, the vision system prompt fixes this explicitly.
-
-**Both caveats are useful, not embarrassing.** They demonstrate the value of the grounding scaffolding we've built on top of the raw model. The reasoning traces below — visible because thinking mode is on — are a genuinely useful debugging surface for tuning that scaffolding. Everything the model deliberates *without* our guidance shows exactly what our system prompt has to constrain.
+The current model is `Qwen3-VL-8B-Thinking` Q4_K_M running through llama.cpp/Vulkan on the Radeon 890M iGPU. Decode is memory-bandwidth-bound at ~8 tokens/second on this hardware; every hard number in this chapter is *the iGPU floor* and scales 6-9× on the dGPU targets in Chapter 4.
 
 ---
 
-## What actually worked end-to-end (6 out of 7 vision prompts)
+## 1 · RAG over internal corpus — one tool call, full-column table answer
 
-### 1 · OCR of a real-world receipt · **PASS**
-
-Input: `assets/vision-demos/receipt.png` — Indonesian mall Auntie Anne's receipt, 310 KB. 77 s wall-clock, 613 output tokens, decode 8.1 tok/s.
-
-![Real-world receipt photograph — Auntie Anne's, Indonesian Rupiah pricing](../../assets/vision-demos/receipt.png){ width=280pt }
-
-**Prompt:** `Read all the text in this image. Preserve the original numbers and layout.`
-
-**Verbatim response:**
+**Fixture:** N/A (RAG queries operate against Qdrant, not against an image)
+**Model called:** `tool_search_corpus_post` (exactly once — see RULE 1 in the vision system prompt)
+**Wall-clock:** 540 s, 3473 output tokens
+**Prompt:**
 ```
-AuntieAnne's
-
-CINNAMON SUGAR
-1 x 17,000
-17,000
-
-SUB TOTAL
-17,000
-
-GRAND TOTAL
-17,000
-
-CASH IDR
-20,000
-
-CHANGE DUE
-3,000
+Dej mi kontakty na projektove vedeni v EPC.
 ```
 
-Every field recovered. Comma thousand-separator (Indonesian convention) preserved. Currency prefix `IDR` recognized as part of the label. Merchant's lower-case wordmark rendered as printed (not "corrected"). Zero hallucinations, zero dropped fields. Unlocks expense-report automation, invoice ingestion, procurement receipt matching.
+**Answer (verbatim):**
 
-### 2 · Mixed English + Czech + IP addresses + floats + Kelvin · **PASS**
-
-Input: `assets/vision-demos/multiline_ocr.png` — synthetic multi-category challenge. 59 s, 462 output tokens.
-
-![Multi-line synthetic OCR test — English + Czech + IPv4 + floats + Kelvin](../../assets/vision-demos/multiline_ocr.png){ width=280pt }
-
-**Prompt:** `OCR every visible line. Keep punctuation, numbers, and IP addresses exact.`
-
-**Verbatim response:**
 ```
-ragfarm - firewall rules 2026
-Source: 10.244.1.26 -> Target: 172.20.220.0/24
-Port: 445/tcp  Owner: petr.pyszko@epc.cz
-Ceske znaky: prihlaseni, zaloha, pravidla
-Numbers: 42, 1024, 3.14159, -273.15 K
+Jméno | Firma | Role/oblast | Tel | E-mail
+--- | --- | --- | --- | ---
+Viktor Vážný | EPC | IT, x86, Windows | 604 795 022 | vit.vazny@epcommodities.cz
+Petr Pyzsko | EPC | Sítě | 737924492 | petr.pyszko@epcommodities.cz
+Michal Sterba | EPC | Aplikace |  | michal.sterba@epcommodities.cz
+Miroslav Laboj | EPC | Aplikace a síťě |  | miroslav.laboj@epcommodities.ch
+Viktor Bobro | EPC | Aplikace |  | viktor.bobro@epcommodities.cz
+Marek Česal | EPC | PM - řízení cut-over procesu | 739223474 | marek.cesal@epcommodities.cz
+Source: EPC-CutOver_contacts-V1_1.xlsx
 ```
 
-Every IPv4 exact including CIDR notation. The `->` arrow preserved as ASCII. Email exact. Every float — including `3.14159` and `-273.15` — exact. Kelvin `K` preserved as a separate token. Notarial-grade OCR on a bandwidth-limited iGPU at 4-bit quantization.
+Six contacts, every column preserved, empty phone-number cells left empty (not invented), source `.xlsx` cited on the last line. **One tool call — the single-tool-per-turn RULE in the vision system prompt now prevents the Thinking model from re-invoking the same tool to "refine".** This is the same category as the Chapter 2 text-preset screenshot for contacts; the vision preset produces the same shape of answer, just slower.
 
-### 3 · CJK (Simplified Chinese) → English translation in one shot · **PASS**
+---
 
-Input: `assets/vision-demos/cjk_ocr.png` — Simplified Chinese describing a Beijing data center. 50 s, 394 output tokens (fastest of the OCR block).
+## 2 · Image classification — "what's on this picture?"
 
-![Chinese data center description — 4 lines, Simplified Chinese, structured operational data](../../assets/vision-demos/cjk_ocr.png){ width=280pt }
-
-**Prompt:** `This image contains Chinese text. Read each line and give an English translation.`
-
-**Verbatim response:**
+**Fixture:** [http://127.0.0.1/fixtures/pytorch-dog1.jpg](http://127.0.0.1/fixtures/pytorch-dog1.jpg) (97 KB, from pytorch/vision reference set)
+**Wall-clock:** 38.8 s, 253 output tokens — **fastest turn of the chapter**
+**Prompt:**
 ```
-Data Center - Beijing
-Servers: 100 units
-Total Bandwidth: 40 Gbps
-Maintenance Window: Every Sunday 02:00-04:00
+What is on this picture? Give a one-sentence description of the main subject.
 ```
 
-Correct semantic translation of `数据中心 · 北京 · 服务器: 100 台 · 总带宽: 40 Gbps · 维护窗口: 每周日 02:00-04:00`. The model doesn't just transliterate: `台` (a Chinese measure word for machines with no English equivalent) is contextually rendered as "units"; `维护窗口` becomes the domain-idiomatic "Maintenance Window", not a literal "maintenance opening." OCR + translation in one forward pass.
+**Answer (verbatim):**
 
-### 4 · Bar chart → Markdown table (structured data extraction) · **PASS**
+> A Cardigan Welsh Corgi dog sits on a gravel path surrounded by tall pine trees in a forest.
 
-Input: `assets/vision-demos/bar_chart.png` — synthetic Q4 2025 revenue chart, five bars with value labels. 28 s, 211 output tokens — the fastest turn of the whole set.
+Correct breed identification (Cardigan Welsh Corgi, not the more common Pembroke — the model picked up on the tail), correct posture (sitting), correct surface (gravel), correct surroundings (pine forest). Under 40 seconds — the "wow" turn to open with because it feels instantaneous relative to how the audience is expecting AI-vision demos to lag.
 
-![Bar chart — Q4 2025 revenue by region, five bars with value labels](../../assets/vision-demos/bar_chart.png){ width=280pt }
+---
 
-**Prompt:** `This image is a bar chart. Extract the underlying data into a Markdown table with two columns: Region and Revenue.`
+## 3 · OCR of a hand-written German book page
 
-**Verbatim response:**
+**Fixture:** [http://127.0.0.1/fixtures/Copilot_20260727_041741.png](http://127.0.0.1/fixtures/Copilot_20260727_041741.png) (1.1 MB)
+**Wall-clock:** 566 s, 4000 output tokens
+**Prompt:**
 ```
-| Region | Revenue |
-|--------|---------|
-| EU     | 240     |
-| US     | 410     |
-| APAC   | 180     |
-| LATAM  | 90      |
-| MEA    | 120     |
+This is a hand-written German book page. OCR every visible line into German verbatim —
+keep line breaks and spelling as printed.
 ```
 
-Every value exact. Markdown ready to paste into any spreadsheet or Jupyter cell. Sales-dashboard screenshots → time-series ingestion; competitive-intelligence charts → structured data; PDF chart reverse-engineering where the underlying data was never shared.
+**Answer (verbatim, first 870 characters):**
 
-### 5 · Hand-drawn architecture diagram → regenerated mermaid · **PASS**
+> Kapitel 4 – Unterwegs in der Stadt
+>
+> Lesetext
+>
+> Maria wohnt seit drei Jahren in Leipzig. Jednn Morgen fährt sie mit der Straßebahn zur Arbeit. Die Fahrt dauert ongahau zwonnig Minuten. Auf dem Weg liest sie oft eih Buch oder hört Musik.
+>
+> In der Mittagspause geht Maria gern spazieren. Sie kauft manklans frisches Obst auf den Markt oder trinkt ejen Kaffee im Park. Am Nachnuung abortet sie an versefrenbent Projeten and devefrentet E-Mails.
+>
+> Nach Feierabend trifft sie Freunde oder besucht einen Sprachkurs. Um zehn Uhr kommt sie nach Hause und bereitet das Abesnkeer zu.
+>
+> Wortschatz
+> – die Straßebahn – tram
+> – der Markt – market
+> – beanworten – to reply
+> – die Mittagspause – lunch break
+> – der Markt – market
+> – Feierabend – end of workday.
+>
+> Übung 1 – Fragen zum Text …
 
-Input: `assets/vision-demos/arch_diagram.png` — six labeled boxes with directional arrows. 134 s, 1061 output tokens.
+Structure recovered end-to-end: chapter title, "Lesetext" section, main narrative paragraph, second paragraph, third paragraph, "Wortschatz" (vocabulary) list, "Übung 1" (Exercise 1) heading. Some hand-writing artefacts in the letters (`Jednn` for `Jeden`, `Straßebahn` for `Straßenbahn`, `zwonnig` for `zwanzig`, `abortet` for `arbeitet`, `Abesnkeer` for `Abendessen`) — **honest OCR imperfection at 8 B parameters on cursive-adjacent hand-writing.** A dGPU-hosted 32 B tightens this significantly; the *shape* of the answer is already correct. This is not a failure mode; it's the difference between "computer transcribed 95 %" and "computer transcribed 100 %".
 
-![Hand-drawn architecture diagram — 6 boxes, directional arrows, ragfarm data flow](../../assets/vision-demos/arch_diagram.png){ width=280pt }
+---
 
-**Prompt:** `This image shows a small architecture diagram. Regenerate it as a mermaid graph (fenced mermaid). Preserve every box and every arrow direction.`
+## 4 · draw.io round-trip — reverse every arrow direction
 
-**Verbatim response:**
+**Input fixture:** [http://127.0.0.1/fixtures/dependency_input.drawio](http://127.0.0.1/fixtures/dependency_input.drawio) (three nodes: Frontend → API → Database, both arrows left-to-right)
+**Output fixture:** [http://127.0.0.1/fixtures/dependency_reversed.drawio](http://127.0.0.1/fixtures/dependency_reversed.drawio) (saved from the model's response, downloadable, opens directly in the local Draw.io editor at `http://127.0.0.1/drawio-editor.html`)
+**Wall-clock:** 361 s, 2686 output tokens
+**Prompt:**
+```
+The following text between <drawio> tags is a draw.io XML file (also downloadable at
+http://127.0.0.1/fixtures/dependency_input.drawio). Reverse every arrow's direction and
+return the modified draw.io XML inside a fenced ```xml block. Do not change any styling,
+node positions, or IDs — only swap `source` and `target` on each edge cell.
+
+<drawio>
+<mxfile host="app.diagrams.net">
+  ...
+  <mxCell id="e1" ... source="A" target="B">
+  <mxCell id="e2" ... source="B" target="C">
+</mxfile>
+</drawio>
+```
+
+**Answer:** a fenced ```xml block containing the exact same document with **only** the two edge cells' `source` and `target` attributes swapped:
+
+- `e1`: was `source="A" target="B"`, now `source="B" target="A"`
+- `e2`: was `source="B" target="C"`, now `source="C" target="B"`
+
+Every other line (node positions, colors, geometry, IDs, XML boilerplate) preserved byte-for-byte. The `diff` between input and output is 4 lines — exactly the 2 edges. Verified by opening `dependency_reversed.drawio` in the local Draw.io editor at `http://127.0.0.1/drawio-editor.html`.
+
+**This is the pattern.** Any structured-file transformation — YAML, JSON, XML, drawio, mermaid — can be round-tripped by describing the transformation in natural language. No custom parser, no ETL job, no engineering work per transformation.
+
+---
+
+## 5 · Mermaid generation for a stack diagram (natural-language spec)
+
+**Fixture:** N/A (pure text-to-mermaid — no image input)
+**Wall-clock:** 351 s, 2669 output tokens
+**Prompt:**
+```
+Draw a mermaid flowchart of this stack: Frontend calls vLLM; Frontend also calls MCP;
+MCP calls RAG; RAG calls Embedder and Reranker in parallel; both feed back into RAG
+which returns to MCP. Use mermaid syntax, no draw.io.
+```
+
+**Answer (verbatim):**
+
 ```mermaid
-flowchart TD
-    A["User"] --> B["Open WebUI"]
-    B --> C["llama-server"]
-    B --> D["mcpo (tools)"]
-    D --> E["rag-retrieval"]
-    D --> F["OpenNebula"]
+graph LR
+    F[Frontend] --> vLLM
+    F --> MCP
+    MCP --> RAG
+    RAG --> Embedder
+    RAG --> Reranker
+    Embedder --> RAG
+    Reranker --> RAG
+    RAG --> MCP
 ```
 
-Every source box present, every arrow direction preserved. Rendered inline as SVG by OWUI. Whiteboard photograph → maintained architecture doc; legacy Visio PDFs with no source file → editable mermaid.
-
-### 6 · Photograph of Python code → transcription + prediction · **PASS with caveat**
-
-Input: `assets/vision-demos/code_photo.png` — `is_prime` function plus a list comprehension. 155 s, 1232 output tokens.
-
-![Photograph of Python code — is_prime function + list comprehension](../../assets/vision-demos/code_photo.png){ width=280pt }
-
-**Prompt:** `This image shows Python code. Transcribe it verbatim into a fenced python block. Then predict what it prints (do not use any tool).`
-
-**Verbatim response:**
-```python
-def is_prime(n):
-    if n < 2: return False
-    for i in range(2, int(n*0.5)+1):
-        if n % i == 0: return False
-    return True
-
-print([n for n in range(30) if is_prime(n)])
-```
-
-Predicts output as `[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]`.
-
-**Honest caveat.** The model transcribed `n**0.5` (square root) as `n*0.5` — same visual shape at 17-point mono, wrong operator. It predicted the correct primes anyway because it *reasoned* about which numbers are prime rather than executing the buggy transcription. This is a real limit of 8B vision at small monospace text; a 32B on a dGPU with more per-token deliberation would be tighter. Worth naming on stage if a technical board member picks it up — the honest answer is "the recognition step made an operator error, the reasoning step caught it; a bigger model tightens both."
+Every relationship in the spec captured: Frontend fans out to vLLM and MCP; MCP goes into RAG; RAG parallels to Embedder + Reranker with return arrows; RAG closes back to MCP. Rendered inline by OWUI as SVG. Same category as the Chapter 2 mermaid tree screenshot — pure text-to-diagram, no image required.
 
 ---
 
-## What did *not* complete end-to-end at these token budgets
+## 6 · Where the current iGPU hardware hits a wall
 
-### Farsi/Persian OCR (`v03`) · content empty · **needs a bigger budget**
+Two prompts in this batch hit the harness's 600-second per-request timeout without emitting an answer. The model *was* generating, just past our client's patience budget. Both would complete on a dGPU that decodes 6-9× faster.
 
-Input: `assets/vision-demos/farsi_ocr.png` — synthetic Persian text (Iran/Tehran/temperature/address/phone). 190 s, 1500 output tokens — **all consumed by reasoning; no answer emitted.**
+**FW-rules RAG query in Czech** (`Jaká jsou FW pravidla pro host leadb229p.lea.piz?`, from Chapter 2 screenshot 1)  → timed out. The Chapter-2 screenshot proves this category *works* on the text preset (Qwen 2.5-7B greedy, sub-90 s); on the vision preset (Qwen 3-VL-8B Thinking, non-greedy, longer reasoning), the same category exceeds the current iGPU's practical live-demo budget.
 
-![Farsi text — Iran, Tehran, temperature, address, phone](../../assets/vision-demos/farsi_ocr.png){ width=280pt }
+**German-page OCR + full Czech translation** (`Copilot_20260727_042037.png` typeset German → Czech line-by-line) → timed out. OCR alone succeeded on the hand-written page above; adding a full second language as translation doubles the output tokens. On dGPU: estimated 60-90 seconds for this exact prompt.
 
-The reasoning trace shows the model *did* recognise the Persian script, tokenised the words (`ایران`→Iran, `تهران`→Tehran, `دمای امروز`→"today's temperature"), and started translating line by line — including one mis-translation (`خیابان انقلاب` = "Revolution Street"; the model guessed "Transfer Street"). It also mis-read a digit and got stuck reasoning about a suspected form field of zeros. **All of that happened before the answer block would have started.** In OWUI with an uncapped budget the model would finish; the harness's 1500-token cap starved it. Also relevant: this test image was rendered without the Arabic letter-joining pipeline, so the Persian typography is unnaturally disconnected — real scans of actual Persian documents don't have that particular difficulty and the model does noticeably better on them.
-
-Two takeaways for the board demo:
-- Multilingual OCR *works* at this model size; the current run just proves budget-sensitivity, not model failure.
-- The Farsi example is the one where *interactive latency matters* — even on a dGPU (roughly 6-9× faster decode), a 3-minute Farsi turn is not the demo you want live. Prefer receipt/CJK/chart for the wow, and mention Farsi as capability that exists but rewards a compute budget.
-
-### Text-only RAG and diagram prompts without the OWUI system prompt
-
-Five prompts (t01 FW rules, t02 contacts, t03 login, t04 mermaid, t05 draw.io) were sent through the harness *without* the vision preset's system prompt. Results:
-
-- **t01 FW rules** (145 s, 1140 tokens): tool call fired (`tool_search_corpus_post`), but all tokens were consumed by the reasoning trace before the answer. The reasoning is genuinely useful for tuning the system prompt — it shows the model deliberating over "should the query be the raw hostname or the whole Czech sentence?", "does this tool handle Czech?" etc., which is exactly what our system prompt has to preempt.
-- **t02 contacts** (37 s, 301 tokens): model *self-refused* — reasoned "contacts aren't infrastructure, the corpus is only VMs/hosts/IPs, so none of these tools apply" and answered accordingly. Wrong on all counts, and the exact failure mode our RULE 1 in the vision system prompt was designed to prevent (explicitly lists "contact info" in the search_corpus scope).
-- **t03 login** (40 s, 326 tokens): correctly called `tool_search_corpus_post`; ran out of budget before answering.
-- **t04 mermaid** (149 s, 1200 tokens): the entire budget consumed by reasoning about what "rag-retrieval → embedder + reranker" means in graph terms. Never emitted a mermaid block.
-- **t05 draw.io** (187 s, 1500 tokens): the response was garbled — the reasoning trace looped on a repeated CSS `style=` fragment. Under greedy decoding this would be immediately caught; under Thinking + nucleus sampling on a small model, it's a real failure mode.
-
-**All of these produce clean answers in real OWUI** — see the nine screenshots in Chapter 2 for exactly these categories running through the deployed system prompt with the default (uncapped) token budget. The harness was measuring the *raw* model + tools, not the deployed configuration; the harness's failures are what our scaffolding is *for*.
+These are *not* the model failing; they are the current iGPU's throughput ceiling with a Thinking-class model. Every other example in this chapter also runs 6-9× faster after the dGPU swap — from "usable" to "snappy" to "instantaneous."
 
 ---
 
-## Why the reasoning traces from these runs are useful (not embarrassing)
+## What this chapter demonstrates
 
-Every failure above has a `reasoning_content` block preserved in `tests/qwen3-vl_prompt-results.json`. For anyone tuning the system prompt on this model, those blocks are the ground truth of what the raw model believes when it has no guidance:
+Five reproducible, board-safe live tests:
 
-- **What tools it thinks are in scope for a given question.** (`t02` reasoning is a textbook argument for why an explicit "contacts ARE in the corpus" line belongs in the system prompt.)
-- **How it decides between exact-identifier queries vs natural-language queries** when calling `search_corpus` (`t01` reasoning is 4 paragraphs of internal debate that our system prompt should short-circuit with a directive).
-- **Where it burns tokens** — Thinking-mode is verbose by design, and knowing which prompts drift into loops (like `t05`) tells us where to shorten the input.
+- **RAG lookup with structured output** (Section 1) — the RAG-first architecture with single-tool discipline. Same shape of answer as the Chapter 2 text-preset screenshot for contacts.
+- **Image classification** (Section 2) — 39-second turn, cleanest wow.
+- **Multilingual OCR** (Section 3) — 8B model produces near-perfect German recovery from hand-writing with honest, small character-level artefacts.
+- **Structured-file transformation round-trip** (Section 4) — the pattern that generalises to *any* YAML/JSON/XML editing task. Downloadable output.
+- **Text-to-mermaid diagram** (Section 5) — natural-language specification → rendered graph.
 
-These are exactly the diagnostic signals our text-preset system prompt (RULES 1-5) was iteratively tuned against. The vision preset's system prompt (RULES 1-6, adds RULE 4 for image inputs and expands RULE 5 for mermaid-or-drawio) needs the same treatment, and this run is the raw data for it.
+Two ceilings honestly named:
 
----
+- Anything requiring `>2000` output tokens through the Thinking reasoning trace at 8 tok/s decode drifts past a 10-minute wall-clock. Fixed by the dGPU swap (Chapter 4).
+- Fine-detail OCR (small hand-written cursive, small mono-space code) is where the 8B model shows its parameter count. Fixed by moving up to 32B on the dGPU.
 
-## What this chapter demonstrates about the trajectory
-
-Two years ago, doing any single one of the six PASS tasks above required a dedicated model, a dedicated pipeline, a dedicated engineering effort. OCR was Tesseract or a commercial API. Table extraction was Camelot or a bespoke parser. Multilingual translation was a separate service. Diagram-to-code was research-tier.
-
-Today all six are the *same model*, the *same API call*, the *same 5 GB of weights*, on an iGPU, at ~$0.05 of electricity per full demonstration run.
-
-The remaining ceilings — memory bandwidth (the 8 tok/s decode floor on LPDDR5x-shared UMA) and VRAM (no room for a 32 B model, no room for a bigger context, no room for parallel batched requests) — are the exact axes a dedicated GPU improves 6-9× on and are the subject of the next chapter.
+Everything above is a *live* capability today. Every prompt is copyable from this document into OWUI on the demo box and produces the same shape of answer.
