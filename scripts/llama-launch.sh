@@ -31,7 +31,15 @@ if [ -n "${LLM_GGUF_MMPROJ:-}" ]; then
   ARGS+=(--mmproj "$LLM_GGUF_MMPROJ")
 fi
 ARGS+=(
-  --host 127.0.0.1 --port 8080 -ngl 999 -c 32768 --context-shift --keep 3072 --jinja
+  --host 127.0.0.1 --port 8080 -ngl 999
+  # Single-user demo box: -np 1 (was auto → 4) collapses 4 parallel slots into
+  # one big one. Total KV memory stays roughly the same as -c 32768 × -np 4
+  # (~128k slot-tokens), but the whole 128k budget belongs to one turn instead
+  # of being split four ways. This gives a Thinking-model long OCR + translation
+  # turn (~15k reasoning + ~5k answer) full room without truncating. Model's
+  # native n_ctx_train is 262144 (256k) — could push to that later but doubles
+  # KV footprint on the shared UMA and needs live monitoring on the demo box.
+  --parallel 1 -c 131072 --context-shift --keep 3072 --jinja
   --seed 42 --temperature 0.6 -fa on -v --mlock --mmap --alias "$ALIAS"
 )
 
