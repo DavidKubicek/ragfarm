@@ -22,5 +22,3 @@ infra/drawio-viewer/*
 !infra/drawio-viewer/index.html
 !infra/drawio-viewer/drawio-editor.html
 
-# generated PDF documentation bundle — rebuild with docs/pdf/build.sh
-docs/pdf/ragfarm.pdf

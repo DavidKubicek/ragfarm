@@ -79,9 +79,21 @@ measured numbers that justify it.
 
 ## Diagrams
 
-![Architecture Diagram](./assets/ragfarm_runtime_component_inventory.png)
+### Runtime component inventory
 
-![Architecture Diagram](./assets/ragfarm_query_time_retrieval_path.png)
+![Runtime component inventory](./assets/ragfarm_runtime_component_inventory.png)
+
+### Query-time control flow
+
+![Query-time control flow — 13 numbered steps, per-stage timings](./assets/ragfarm_query_time_retrieval_path.png)
+
+### Systemd unit topology (host services)
+
+![Systemd unit topology — llama, reranker, embedder, ingester-watcher, stack](./assets/ragfarm_systemd_service_topology.png)
+
+### Container network topology (infra/compose.yaml)
+
+![Container network topology — host-network vs bridge groups, ports, volumes](./assets/ragfarm_container_network_topology.png)
 
 ## Working chat examples (verified in OWUI)
 
