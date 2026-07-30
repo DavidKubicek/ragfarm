@@ -39,8 +39,8 @@ ARGS+=(
   # turn (~15k reasoning + ~5k answer) full room without truncating. Model's
   # native n_ctx_train is 262144 (256k) — could push to that later but doubles
   # KV footprint on the shared UMA and needs live monitoring on the demo box.
-  --parallel 1 -c 131072 --context-shift --keep 3072 --jinja
-  --seed 42 --temperature 0.6 -fa on -v --mlock --mmap --alias "$ALIAS"
+  --parallel 1 -c 40960 --context-shift --keep 3072 --jinja
+  --temperature 1 --top-k 20 --top-p 0.95 --presence-penalty 0 -fa on -v --mlock --mmap --alias "$ALIAS" # --seed 42 
 )
 
 if [ -n "${LLAMA_LAUNCH_DRY_RUN:-}" ]; then

@@ -159,6 +159,11 @@ MODEL_PARAMS = {
     "mirostat_eta": 0,
     "mirostat_tau": 0,
     "tfs_z": 1,
+    # Response ceiling — needed for FW-rules markdown tables (~600 tokens) etc.
+    # Without this OWUI's frontend applies a modest default (~2-4k) that
+    # truncates long tabular answers mid-value. 8k leaves room for the 6-row
+    # FW table + tool call + Source citation with comfortable headroom.
+    "max_tokens": 8192,
     # client-side agent behavior
     "compact_token_threshold": 24000,
     "stream_response": True,
