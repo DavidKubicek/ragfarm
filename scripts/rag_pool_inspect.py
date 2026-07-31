@@ -18,12 +18,20 @@ USAGE
   .venv/bin/python scripts/rag_pool_inspect.py --branches "hsmbvxip001ts" "Zabbix"
   POOL=30 RAG_PREFETCH=30 .venv/bin/python scripts/rag_pool_inspect.py "..."
 
+  # ADR-0010 §1 floor calibration — dump every fused candidate WITH its
+  # cross-encoder score to CSV so a human can label required/junk and read the
+  # right RAG_MIN_SCORE off the boundary. One row per (query, candidate).
+  .venv/bin/python scripts/rag_pool_inspect.py --dump-scored calib.csv \
+        "Jak se přihlásím do EPC?" "hsmbvxip001ts" "kontakty na Petr"
+
 ENV (defaults match the loopback deployment):
-  QDRANT_URL, EMBED_ENDPOINT, QDRANT_COLLECTION, RAG_PREFETCH, POOL
+  QDRANT_URL, EMBED_ENDPOINT, RERANK_ENDPOINT, QDRANT_COLLECTION, RAG_PREFETCH, POOL
 Run with the project venv (.venv) — it has qdrant_client + requests.
 """
 import os
 import sys
+import csv
+import math
 import argparse
 
 try:
@@ -35,6 +43,7 @@ except ImportError as e:
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6333")
 EMBED      = os.environ.get("EMBED_ENDPOINT", "http://127.0.0.1:8090/embed")
+RERANK_EP  = os.environ.get("RERANK_ENDPOINT", "http://127.0.0.1:8081/reranking")
 COLL       = os.environ.get("QDRANT_COLLECTION", "corpus")
 PREFETCH   = int(os.environ.get("RAG_PREFETCH", "20"))   # per-branch candidates before fusion
 POOL       = int(os.environ.get("POOL", "20"))           # rows to display
@@ -86,14 +95,64 @@ def dump(qc: QdrantClient, query: str, branches: bool):
                 print(_row(i, p))
 
 
+def rerank_scores(query: str, cands: list) -> list[float]:
+    """Score every candidate with the cross-encoder in the same way server.py does
+    (bge-reranker-v2-m3, sigmoided). Returns a list aligned with `cands` order."""
+    if not cands:
+        return []
+    docs = [(p.payload or {}).get("text_clean") or (p.payload or {}).get("text") or "" for p in cands]
+    r = requests.post(RERANK_EP, json={"query": query, "documents": docs}, timeout=300)
+    r.raise_for_status()
+    scores = [0.0] * len(cands)
+    for item in r.json()["results"]:
+        scores[item["index"]] = 1.0 / (1.0 + math.exp(-float(item["relevance_score"])))
+    return scores
+
+
+def dump_scored(qc: QdrantClient, queries: list[str], out_path: str, pool_size: int) -> None:
+    """ADR-0010 §1 calibration dump: emit one CSV row per (query, candidate) with
+    fused rank, reranker score, source, section, kind, and a text head. The human
+    labels each row required/junk in a `label` column, then reads the highest score
+    that keeps all required rows (including low-scoring reverse FW rules) while
+    cutting junk — that value goes into RAG_MIN_SCORE."""
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["query", "rank_fused", "rerank_score", "label",
+                    "source_file", "section", "kind", "text_head"])
+        for q in queries:
+            dense, sparse = embed(q)
+            pts = qc.query_points(
+                COLL,
+                prefetch=[qm.Prefetch(query=dense, using="dense", limit=PREFETCH),
+                          qm.Prefetch(query=sparse, using="sparse", limit=PREFETCH)],
+                query=qm.FusionQuery(fusion=qm.Fusion.RRF), limit=pool_size, with_payload=True,
+            ).points
+            scores = rerank_scores(q, pts)
+            for i, (p, s) in enumerate(zip(pts, scores)):
+                pl = p.payload or {}
+                head = (pl.get("text", "") or "").replace("\n", " ").replace("\r", " ")[:200]
+                w.writerow([q, i + 1, f"{s:.4f}", "",
+                            pl.get("source_file", ""), _loc(pl), pl.get("kind", ""), head])
+            print(f"  dumped {len(pts)} candidates for {q!r}")
+    print(f"wrote {out_path} — label the rows and read RAG_MIN_SCORE off the required/junk boundary")
+
+
 def main():
     ap = argparse.ArgumentParser(description="inspect the RAG candidate pool (recall vs ranking)")
     ap.add_argument("queries", nargs="*", default=[], help="queries (default: a built-in set)")
     ap.add_argument("--branches", action="store_true", help="also dump dense-only and sparse-only lists")
+    ap.add_argument("--dump-scored", metavar="CSV",
+                    help="ADR-0010 §1 floor calibration: write reranker-scored candidates to CSV "
+                         "with an empty `label` column for human required/junk labelling.")
+    ap.add_argument("--pool", type=int, default=POOL,
+                    help=f"candidate pool size for --dump-scored (default {POOL}; server.py uses RAG_CANDIDATES=40)")
     args = ap.parse_args()
     queries = args.queries or DEFAULT_QUERIES
     qc = QdrantClient(url=QDRANT_URL)
     print(f"collection={COLL} prefetch={PREFETCH} pool={POOL} embed={EMBED}")
+    if args.dump_scored:
+        dump_scored(qc, queries, args.dump_scored, args.pool)
+        return
     for q in queries:
         dump(qc, q, args.branches)
 

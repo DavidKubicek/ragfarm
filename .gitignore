@@ -28,3 +28,4 @@ infra/drawio-viewer/*
 
 # harness reference JSONs — untracked
 tests/qwen3-vl_*_prompt-results.json
+backups/

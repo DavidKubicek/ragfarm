@@ -33,7 +33,14 @@ the agent layer registers it over HTTP.
 
 Config (env): QDRANT_URL, EMBED_ENDPOINT, RERANK_ENDPOINT, QDRANT_COLLECTION,
 RAG_PORT, RAG_PREFETCH, RAG_CANDIDATES, RAG_USE_RERANKER, RAG_MIN_SCORE,
+RAG_GATE_KNEEDLE, RAG_GATE_MIN_SET, RAG_GATE_WEAK_KNEE,
 RAG_MMR_LAMBDA, RAG_EXPAND_NEIGHBORS, RAG_EXPAND_MAX_WORDS.
+
+Gating (ADR-0010 §1): two-stage cut after rerank. Stage 1 is the calibrated
+absolute floor RAG_MIN_SCORE (workhorse; default 0.0 pre-calibration). Stage 2
+is a Kneedle chord-distance knee, armed only when survivors > RAG_GATE_MIN_SET
+and the knee is stronger than RAG_GATE_WEAK_KNEE — degrades to a no-op on flat
+curves. LightRAG traversal branch (ADR-0010 §2) is deliberately not built here.
 """
 from __future__ import annotations
 
@@ -58,6 +65,9 @@ PREFETCH   = int(os.environ.get("RAG_PREFETCH", "40"))          # candidates per
 CANDIDATES = int(os.environ.get("RAG_CANDIDATES", "40"))        # fused pool handed to the re-ranker (broad-in)
 USE_RERANK = os.environ.get("RAG_USE_RERANKER", "1") != "0"     # cross-encoder rerank (default) vs legacy MMR
 MIN_SCORE  = float(os.environ.get("RAG_MIN_SCORE", "0.0"))      # drop reranked hits below this (0.0 = keep all)
+GATE_KNEEDLE  = os.environ.get("RAG_GATE_KNEEDLE", "1") != "0"  # ADR-0010 §1: Kneedle hatch after the floor
+GATE_MIN_SET  = int(os.environ.get("RAG_GATE_MIN_SET", "12"))   # arm Kneedle only when post-floor survivors exceed this
+GATE_WEAK_KNEE = float(os.environ.get("RAG_GATE_WEAK_KNEE", "0.05"))  # normalized chord distance below which a knee is called weak
 MMR_LAMBDA = float(os.environ.get("RAG_MMR_LAMBDA", "0.3"))     # legacy MMR only: relevance vs diversity
 EXPAND     = int(os.environ.get("RAG_EXPAND_NEIGHBORS", "1"))   # same-section neighbor chunks each side (0=off)
 EXPAND_MAX = int(os.environ.get("RAG_EXPAND_MAX_WORDS", "600")) # word cap on an expanded window
@@ -84,16 +94,15 @@ def _embed_query(text: str) -> tuple[list[float], qm.SparseVector]:
 
 
 # --- cross-encoder re-rank (default path) ------------------------------------
-def _rerank(query: str, cands: list, k: int, min_score: float) -> list[tuple]:
+def _rerank_pairs(query: str, cands: list) -> list[tuple]:
     """Score every (query, chunk) pair with the cross-encoder (bge-reranker-v2-m3,
     served by the dedicated GPU llama.cpp reranker at RERANK_ENDPOINT, ADR-0008),
-    sort by relevance, drop anything below `min_score`, and return the top k as
-    (point, score) tuples. Unlike MMR there is no diversity term, so N distinct
-    records that share a template (e.g. contact rows) all keep their true scores
-    instead of being suppressed as 'redundant'. Only pair-scoring is delegated to
-    the reranker service; this file still owns the ranking POLICY (pool, sort,
-    floor, k)."""
-    if not cands or k <= 0:
+    return them sorted by relevance descending, UNFILTERED. Cutting is a separate
+    policy (see `_gate`) so the same scored pool is available to the CSV-dump
+    calibration path in scripts/rag_pool_inspect.py without duplicating this
+    request. Only pair-scoring is delegated to the reranker service; this file
+    still owns the ranking POLICY."""
+    if not cands:
         return []
     docs = [(p.payload or {}).get("text_clean") or (p.payload or {}).get("text") or ""
             for p in cands]
@@ -105,9 +114,54 @@ def _rerank(query: str, cands: list, k: int, min_score: float) -> list[tuple]:
     scores = [0.0] * len(cands)
     for item in r.json()["results"]:
         scores[item["index"]] = 1.0 / (1.0 + math.exp(-float(item["relevance_score"])))
-    ranked = sorted(zip(cands, scores), key=lambda t: t[1], reverse=True)
-    out = [(p, float(s)) for p, s in ranked if s >= min_score]
-    return out[:k]
+    return sorted(zip(cands, scores), key=lambda t: t[1], reverse=True)
+
+
+def _kneedle_cut(scores: list[float], min_set: int, weak: float) -> tuple[int | None, float]:
+    """Chord-distance Kneedle for a sorted-descending score list. Draws the line
+    from (0, s[0]) to (n-1, s[-1]) and finds the interior index where the actual
+    score falls furthest BELOW that line — the elbow between the plateau and the
+    tail. Returns (cut_index, max_normalized_distance). The cut is exclusive:
+    caller keeps scored[:cut_index], dropping everything from the elbow onwards.
+
+    Returns (None, 0.0) when the set is too small, the score range is zero, or
+    the strongest knee is weaker than `weak` (as a fraction of the score span) —
+    all three cases mean 'no clear elbow, leave the set alone'."""
+    n = len(scores)
+    if n < max(min_set, 3):
+        return None, 0.0
+    y0, yn = scores[0], scores[-1]
+    span = y0 - yn
+    if span <= 0:
+        return None, 0.0
+    max_d = 0.0
+    knee = None
+    for i in range(1, n - 1):
+        y_line = y0 + (yn - y0) * i / (n - 1)
+        d = (y_line - scores[i]) / span
+        if d > max_d:
+            max_d, knee = d, i
+    if knee is None or max_d < weak:
+        return None, max_d
+    return knee, max_d
+
+
+def _gate(scored: list[tuple], k: int, min_score: float) -> tuple[list[tuple], dict]:
+    """ADR-0010 §1 two-stage cut, then top-k. Stage 1 = absolute floor
+    (workhorse); stage 2 = Kneedle hatch (armed only when survivors exceed
+    GATE_MIN_SET and the knee is strong). Returns (selected, diag) where diag
+    goes into `_timing_ms` so operators can see which cut fired on this query."""
+    diag = {"in": len(scored), "floor_drop": 0, "kneedle_cut": None, "kneedle_d": 0.0}
+    survivors = [(p, s) for p, s in scored if s >= min_score]
+    diag["floor_drop"] = len(scored) - len(survivors)
+    if GATE_KNEEDLE and len(survivors) > GATE_MIN_SET:
+        cut_idx, max_d = _kneedle_cut([s for _, s in survivors], GATE_MIN_SET, GATE_WEAK_KNEE)
+        diag["kneedle_d"] = round(max_d, 3)
+        if cut_idx is not None:
+            survivors = survivors[:cut_idx]
+            diag["kneedle_cut"] = cut_idx
+    diag["out"] = len(survivors[:k])
+    return survivors[:k], diag
 
 
 # --- MMR re-rank (legacy fallback, RAG_USE_RERANKER=0) ------------------------
@@ -248,11 +302,15 @@ def search_corpus(query: str, k: int = 8) -> dict:
     # Narrow-out: cross-encoder rerank (default) or legacy MMR. Both yield
     # (point, score) so the returned score always matches the ordering.
     _t = time.perf_counter()
+    gate_diag = None
     if USE_RERANK:
-        selected = _rerank(query, res.points, k, MIN_SCORE)
+        scored = _rerank_pairs(query, res.points)
+        selected, gate_diag = _gate(scored, k, MIN_SCORE)
     else:
         selected = [(p, p.score) for p in _mmr(res.points, k, MMR_LAMBDA)]
     tm["rerank_ms"] = round((time.perf_counter() - _t) * 1000, 1)
+    if gate_diag is not None:
+        tm["gate"] = gate_diag
 
     _t = time.perf_counter()
     hits = []
@@ -271,16 +329,21 @@ def search_corpus(query: str, k: int = 8) -> dict:
             "lang": pl.get("lang"),
         })
     tm["expand_ms"] = round((time.perf_counter() - _t) * 1000, 1)
-    log.info("search_corpus q=%r k=%d -> %d/%d cands  embed=%.0f fuse=%.0f rerank=%.0f expand=%.0f ms",
+    gate_note = ""
+    if gate_diag is not None:
+        gate_note = (f"  gate: floor_drop={gate_diag['floor_drop']}"
+                     f" kneedle={'-' if gate_diag['kneedle_cut'] is None else gate_diag['kneedle_cut']}"
+                     f"(d={gate_diag['kneedle_d']}) -> {gate_diag['out']}")
+    log.info("search_corpus q=%r k=%d -> %d/%d cands  embed=%.0f fuse=%.0f rerank=%.0f expand=%.0f ms%s",
              query[:80], k, len(hits), len(res.points),
-             tm["embed_ms"], tm["fuse_ms"], tm["rerank_ms"], tm["expand_ms"])
+             tm["embed_ms"], tm["fuse_ms"], tm["rerank_ms"], tm["expand_ms"], gate_note)
     return {"query": query, "count": len(hits), "results": hits, "_timing_ms": tm}
 
 
 if __name__ == "__main__":
-    log.info("rag-retrieval on %s:%d  (qdrant=%s coll=%s embed=%s) prefetch=%d cands=%d rerank=%s%s min_score=%.3f expand=%d",
+    log.info("rag-retrieval on %s:%d  (qdrant=%s coll=%s embed=%s) prefetch=%d cands=%d rerank=%s%s min_score=%.3f gate_kneedle=%s(min_set=%d,weak=%.2f) expand=%d",
              HOST, PORT, QDRANT_URL, COLL, EMBED, PREFETCH, CANDIDATES,
              USE_RERANK, (" via=%s" % RERANK_EP) if USE_RERANK else (" mmr_lambda=%.2f" % MMR_LAMBDA),
-             MIN_SCORE, EXPAND)
+             MIN_SCORE, GATE_KNEEDLE, GATE_MIN_SET, GATE_WEAK_KNEE, EXPAND)
     # Streamable HTTP transport so mcpo / the agent layer can register it over HTTP.
     mcp.run(transport="streamable-http")
