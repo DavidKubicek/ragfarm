@@ -1,7 +1,7 @@
 # ragfarm — on-prem RAG + infra-control agent for AMD Ryzen AI 9 HX 370
 Author: David Kubicek (david.kubicek@eywo.cz)
 
-This software is provided under the terms of the MIT license [[LICENSE.txt]].
+This software is provided under the terms of the MIT license [`docs/prompts.md`](docs/prompts.md) (LICENSE.txt).
 
 A fully on-prem retrieval-augmented assistant for a customer VM farm. It answers
 questions over thousands of internal documents/notes **and** lets infra admins
