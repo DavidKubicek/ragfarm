@@ -9,6 +9,7 @@ logs/
 .env
 .venv/
 .venv-rocm/
+.claude/
 services/ingester/manifest.db*
 services/ingester/known-good.constraints.txt
 tests/*.json
