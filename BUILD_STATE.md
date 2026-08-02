@@ -12,13 +12,13 @@ Reference the log file, do not parse it or reproduce it here.
 
 | NN | step                | status  | updated_utc       | log                            | summary |
 |----|---------------------|---------|-------------------|--------------------------------|---------|
-| 01 | npu-bringup         | SKIP    | 2026-06-15T19:10Z | logs/01-npu-bringup.log        | NPU UNUSED, but with CMDLINE="amd_iommu=pgtbl_v2 iommu=on" NPU/VitisAI works perfectly, Test Finished |
-| 02 | igpu-llm            | DONE    | 2026-06-15T20:05Z | logs/02-igpu-llm.log           | llama.cpp+Vulkan built, Qwen2.5-7B-Instruct Q4_K_M loaded, gate passed (Pong! at ~11.8 tok/s) |
-| 03 | embedder-service    | DONE    | 2026-06-16T08:10Z | logs/03-embedder-service.log   | BGEM3FlagModel CPU, safetensors=True, :8090/embed gate passed (1024-dim dense+sparse, EN+CS) |
-| 04 | qdrant-ingester     | DONE    | 2026-06-18T10:05Z | logs/04-qdrant-ingester.log    | Qdrant up, 138 chunks ingested (2 xlsx+1 docx), dense+sparse schema, hostname sparse hit + Czech dense hit pass |
+| 01 | npu-bringup         | PENDING | 2026-06-15T19:10Z | logs/01-venv-setup.log         | Setup NVIDIA-based .venv in $HOME/ragfarm; the main repo |
+| 02 | igpu-llm            | PENDING | 2026-06-15T20:05Z | logs/02-igpu-llm.log           | llama.cpp+NVIDIA built, Qwen2.5-7B-Instruct Q4_K_M loaded, gate passed (Pong! at ~11.8 tok/s) |
+| 03 | embedder-service    | PENDING | 2026-06-16T08:10Z | logs/03-embedder-service.log   | BGEM3FlagModel CPU, safetensors=True, :8090/embed gate passed (1024-dim dense+sparse, EN+CS) |
+| 04 | qdrant-ingester     | PENDING | 2026-06-18T10:05Z | logs/04-qdrant-ingester.log    | Qdrant up, 138 chunks ingested (2 xlsx+1 docx), dense+sparse schema, hostname sparse hit + Czech dense hit pass |
 | 05 | mcp-placement       | BLOCKED | 2026-06-18T11:30Z | logs/05-mcp-placement.log      | no OpenNebula access in PoC; ON creds+reachability deferred to deployment (ADR-0003) |
 | 06 | mcp-fs-host-control | BLOCKED | 2026-06-18T11:30Z | logs/06-mcp-fs-host-control.log| host-control needs live ON (drain-reboot); deferred to deployment (ADR-0003) |
-| 07 | agent-wiring        | DONE    | 2026-07-07T09:20Z | logs/07-agent-wiring.log       | Open WebUI + mcpo + rag-retrieval (search_corpus hybrid RRF); RAG-only gate PASSED in browser via 'ragfarm (corpus RAG)' preset (grounding prompt): sparse hostname + Czech dense both grounded. Full gate (where_is_vm) deferred — 05/06 BLOCKED |
+| 07 | agent-wiring        | PENDING | 2026-07-07T09:20Z | logs/07-agent-wiring.log       | Open WebUI + mcpo + rag-retrieval (search_corpus hybrid RRF); RAG-only gate PASSED in browser via 'ragfarm (corpus RAG)' preset (grounding prompt): sparse hostname + Czech dense both grounded. Full gate (where_is_vm) deferred — 05/06 BLOCKED |
 
 ---
 
