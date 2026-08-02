@@ -1,6 +1,6 @@
 # ragfarm venv lock — CPU profile (torch from download.pytorch.org/whl/cpu)
 # Generated from the live target venv via 'pip freeze'. deploy.sh --profile cpu
-# installs this with --extra-index-url .../whl/cpu. For CUDA use requirements.cu12.lock.
+# installs this with --extra-index-url .../whl/cpu. For CUDA use requirements.cu13.lock.
 # Regenerate: .venv/bin/pip freeze | sed 's/+cpu//' (keep this header).
 accelerate==1.12.0
 aiohappyeyeballs==2.6.2
@@ -83,7 +83,7 @@ setuptools==82.0.1
 six==1.17.0
 soupsieve==2.8.4
 starlette==1.3.1
-sympy==1.13.1
+sympy==1.13.3
 threadpoolctl==3.6.0
 tokenizers==0.23.0rc0
 torch==2.13.0

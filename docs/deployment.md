@@ -140,9 +140,9 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   ordered phases (preflight → venv → host services → stack → corpus → watcher →
   verify), each ending in a machine-checkable gate; safe to re-run. Uses `sudo` only
   for the specific systemd install/enable actions (never wraps the whole script).
-  Picks a Python dependency profile — `--profile cpu` (default) or `cu12` — pinned in
-  `services/requirements.lock` / `requirements.cu12.lock` (identical package set;
-  only the torch wheel index differs, CPU vs CUDA 12.x). Builds the reranker GGUF if
+  Picks a Python dependency profile — `--profile cpu` (default) or `cu13` — pinned in
+  `services/requirements.lock` / `requirements.cu13.lock` (identical package set;
+  only the torch wheel index differs, CPU vs CUDA 13.x). Builds the reranker GGUF if
   absent and installs all host units incl. `ragfarm-reranker`. The AI-out-of-the-loop
   path for repeatable deploys.
 - `mcpo-heal.sh` — waits until the MCP backends accept TCP, then restarts mcpo once

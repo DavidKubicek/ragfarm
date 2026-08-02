@@ -25,7 +25,7 @@
 #   scripts/deploy.sh <phase>         # run one phase
 #   scripts/deploy.sh --from <phase>  # run from <phase> to the end
 #   scripts/deploy.sh --list          # list phases in order
-#   scripts/deploy.sh --profile cu12  # select dep/torch profile (default: cpu)
+#   scripts/deploy.sh --profile cu13  # select dep/torch profile (default: cpu)
 #   scripts/deploy.sh --recreate-corpus   # force a corpus rebuild (alias switch)
 # =============================================================================
 set -euo pipefail
@@ -36,7 +36,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ---- config (single source of truth; override via env or flags) -------------
-PROFILE="${PROFILE:-cpu}"                       # cpu | cu12 | rocm (see profile block)
+PROFILE="${PROFILE:-cpu}"                       # cpu | cu13 | rocm (see profile block)
 VENV="${VENV:-$HOME/ragfarm/.venv}"
 PYVER="${PYVER:-python3.12}"
 export LLAMA_DIR="${LLAMA_DIR:-$HOME/llama.cpp}"  # llama.cpp checkout (build/bin + convert_hf_to_gguf.py);
@@ -68,9 +68,9 @@ RECREATE_CORPUS=0
 profile_config() {
 	case "$PROFILE" in
 		cpu)  LOCK="services/requirements.lock";       TORCH_INDEX="https://download.pytorch.org/whl/cpu"  ;;
-		cu12) LOCK="services/requirements.cu12.lock";   TORCH_INDEX="https://download.pytorch.org/whl/cu124" ;;
+		cu13) LOCK="services/requirements.cu13.lock";   TORCH_INDEX="https://download.pytorch.org/whl/cu130" ;;
 		rocm) LOCK="services/requirements.rocm.lock";   TORCH_INDEX="https://download.pytorch.org/whl/rocm7.2" ;;
-		*)    die "unknown --profile '$PROFILE' (want: cpu | cu12 | rocm)" ;;
+		*)    die "unknown --profile '$PROFILE' (want: cpu | cu13 | rocm)" ;;
 	esac
 }
 

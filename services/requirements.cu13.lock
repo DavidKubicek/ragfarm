@@ -1,8 +1,10 @@
-# ragfarm venv lock — CUDA 12.x profile (torch from download.pytorch.org/whl/cu124)
-# Same package set as requirements.lock; the ONLY difference is the torch build,
-# selected by deploy.sh --profile cu12 via --extra-index-url .../whl/cu124. pip pulls
-# torch's nvidia-* CUDA runtime deps automatically (not pinned here — no CUDA venv to
-# freeze from yet; re-freeze on the prod box after first install to fully pin them).
+# ragfarm venv lock — CUDA 13.x profile (torch from download.pytorch.org/whl/cu130)
+# Target: DGX Spark (GB10, sm_121, cuda-libraries-13-0). Same package set as
+# requirements.lock; the ONLY difference is the torch build, selected by
+# deploy.sh --profile cu13 via --extra-index-url .../whl/cu130. pip pulls torch's
+# nvidia-* CUDA runtime deps automatically (not pinned here — no CUDA venv to
+# freeze from yet; RE-FREEZE ON THE SPARK after first successful install to fully
+# pin them, and commit the result — that is what makes deploy.sh reproducible).
 # Only torch/torchvision/torchaudio differ CPU->CUDA; everything else is identical.
 accelerate==1.12.0
 aiohappyeyeballs==2.6.2
@@ -85,7 +87,7 @@ setuptools==82.0.1
 six==1.17.0
 soupsieve==2.8.4
 starlette==1.3.1
-sympy==1.13.1
+sympy==1.13.3
 threadpoolctl==3.6.0
 tokenizers==0.23.0rc0
 torch==2.13.0
