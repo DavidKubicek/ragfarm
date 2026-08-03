@@ -46,43 +46,67 @@ The single most important architectural fact carries over from
 Choose models by *active* parameters, not total. That is what makes an MoE the
 right shape here and a dense 70B the wrong one.
 
-### The sm_121 FP4 trap — the finding that shapes this ADR
+### The sm_121 FP4 situation — two eras, do not confuse them
 
-The intuitive plan was "Blackwell has FP4 tensor cores, so run NVFP4 and watch it
-crush Q4_K_M." The hardware reality on *this specific part* is narrower, and
-getting it wrong produces either garbage output or a silent fallback that
-underdelivers while looking fine:
+> **CORRECTION (2026-08-03, same day).** An earlier revision of this ADR stated
+> that GB10 has "no usable native FP4 compute path" and that `--moe-backend marlin`
+> is *mandatory*. **That was wrong** — it described the pre-May-2026 state of the
+> toolchain and would have parked us on the slow path indefinitely. The corrected
+> position is below. The Marlin advice was safe but expensive; treat any source
+> repeating it as stale.
 
-1. **GB10 (sm_121) has no usable native FP4 compute path.** FlashInfer-TRTLLM's
-   FP4 MoE kernels gate on `SM100+` and reject 12.x consumer Blackwell; the
-   CUTLASS FP4 GEMM they fall back to fails on sm_120/sm_121. The working path
-   for MoE layers is **Marlin W4A16**: NVFP4 weights are dequantized FP4→BF16 and
-   the matmul runs in **BF16**.
-2. **Therefore `--moe-backend marlin` is mandatory**, not an optimization. Without
-   it, the documented failure mode is a model that loads cleanly and then emits
-   streams of `!!!!!` — a silent numerical failure, not a crash. Any agent
-   debugging "the model outputs garbage" must check this **first**.
-3. **NVFP4's win here is bandwidth and capacity, not tensor-core throughput.**
-   4-bit weights mean ~4× less to stream per token versus BF16. Since decode is
-   bandwidth-bound, that *is* the dominant win — it simply does not come from the
-   FP4 ALUs, and prefill compute still happens in BF16.
-4. **sm_121 NVFP4 kernels require a recent vLLM.** Stock upstream builds working
-   sm_121 NVFP4 kernels from **v0.19.0** onward, with a native SM120/121 CUTLASS
-   NVFP4 GEMM landing in vLLM PR #40082 (merged 2026-05-20). Community model cards
-   that say "tested on v0.13.0" predate that work. **Pin ≥ 0.19.0; prefer current
-   stable.**
+**Era 1 (stale, pre-#40082).** FlashInfer-TRTLLM's FP4 MoE kernels gate on `SM100+`
+and reject 12.x consumer Blackwell, and the CUTLASS FP4 GEMM they fell back to
+failed on sm_120/sm_121 — producing garbage output (streams of `!!!!!`) rather than
+an error. In that world the only working MoE path really was **Marlin W4A16**:
+NVFP4 weights dequantized FP4→BF16, matmul in BF16, no FP4 ALU use at all.
 
-Consequence for expectations: NVFP4 is still the right target — but the honest
-pitch is **"same footprint, better numerics than Q4_K_M, and MoE-shaped decode"**,
-not "FP4 tensor cores make it fly." Recording this here so nobody re-derives the
-optimistic version and then benchmarks a disappointment.
+**Era 2 (current, what we target).** Native FP4 on sm_121 now works:
+
+1. **vLLM PR #40082 (merged 2026-05-20)** adds FlashInfer **b12x** backends
+   explicitly targeting SM120/SM121 — DGX Spark GB10 named directly. Its
+   `b12x_fused_moe` fuses token dispatch, W1 GEMM, SwiGLU and W2 GEMM into one
+   call, taking BF16 hidden states with activation quantization fused internally.
+2. **CUTLASS issue #3096** — the SM12x NVFP4 grouped-GEMM garbage-output bug — is
+   **fixed** via the FlashInfer SM120 patches plus `compute_120f`, which requires
+   **CUDA 13.0**. Our target is `cuda-libraries-13-0`, so we are on the right side
+   of that requirement by construction.
+3. Measured on the actual part: **NVFP4 ≈ 356 TFLOPS with MoE grouped GEMM on
+   sm_121** (NVIDIA developer forum). That is real tensor-core FP4, not dequant.
+
+**Therefore the backend choice is a decision, not a constant:**
+
+| backend | what it does | when |
+|---|---|---|
+| `flashinfer` (b12x) | **native FP4** MoE, fused | **the target.** Requires a vLLM containing #40082 + CUDA 13.0 |
+| `marlin` | FP4→BF16 dequant, W4A16 | **fallback only**, if b12x fails on our checkpoint. Costs the FP4 speedup |
+
+**Still true and still important:** a *misconfigured* FP4 MoE on this part fails
+**silently** — the model loads and emits `!!!!!` rather than crashing. So garbage
+output is still a backend/kernel problem first and a model problem second. The
+difference is that the fix is now "get onto b12x", not "retreat to Marlin".
+
+Also note MTP (speculative decoding) measured **-22%** on the Marlin path — do not
+enable it there.
+
+**Version floor:** the working sm_121 NVFP4 kernels start at vLLM **v0.19.0**, but
+#40082 landed later (2026-05-20). **Use a current stable release (v0.22.x at time
+of writing), not merely ≥0.19.0.** Community model cards citing v0.13.0 predate all
+of this.
+
+Consequence for expectations, corrected: NVFP4 should be **meaningfully faster than
+Q4_K_M**, not merely equal-with-better-numerics. Q4_K_M in llama.cpp always
+dequantizes to FP16/BF16 for the matmul and has no native-4-bit compute path at
+all; NVFP4 on b12x does the math in FP4. The gap should show up most on prefill
+(compute-bound). Decode remains bandwidth-bound, where both are ~4 bits/weight and
+the MoE active-parameter count is what dominates. **Measure both.**
 
 ### Order-of-magnitude sanity bound (**MEASURE** — replace with real numbers)
 
 For a 30B-A3B MoE at 4-bit: ~3B *active* params × ~0.5 B/param ≈ **~1.5 GB streamed
 per token**. At ~221 GB/s that is a theoretical ceiling around ~140 tok/s; real
-decode will land well below it after attention, KV traffic, and Marlin's
-dequantization overhead. The same 30B *dense* at 4-bit would stream ~15 GB/token —
+decode will land well below it after attention and KV traffic (plus dequantization
+overhead if we end up on the Marlin fallback). The same 30B *dense* at 4-bit would stream ~15 GB/token —
 roughly an order of magnitude worse. That gap, not FP4, is the reason to go MoE.
 
 ## Decision
@@ -103,8 +127,9 @@ plumbing that ADR-0009 had to build around.
 - Tool calling: `--enable-auto-tool-choice --tool-call-parser hermes`. This is the
   functional replacement for llama.cpp's `--jinja`; ADR-0004's typed-parameter
   actuation contract is unaffected.
-- **Mandatory:** `--moe-backend marlin` (see the trap above).
-- **Mandatory:** vLLM **≥ 0.19.0**.
+- **Backend:** `--moe-backend flashinfer` (b12x, native FP4) — marlin is the fallback only, and costs the FP4 speedup.
+- **Version:** current stable vLLM (v0.22.x). PR #40082 landed after the 0.19
+  floor, so "≥0.19.0" is not sufficient to get the native-FP4 path.
 - Context must be capped explicitly (`--max-model-len`); the 30B-A3B does not fit
   at full context alongside the reranker and embedder on shared unified memory.
 
@@ -200,10 +225,10 @@ Negative / cost:
   GGUF-shaped and needs reworking for safetensors + vLLM.
 - Two serving engines now coexist (vLLM for generation, llama.cpp for reranking),
   which is more surface than one.
-- The Marlin fallback means we are paying NVFP4's accuracy benefit without its
+- If we end up on the Marlin fallback we pay NVFP4 accuracy without its
   speed benefit; if a future vLLM/driver combination enables real FP4 GEMM on
   sm_121, that is free performance we should re-test for.
-- `--moe-backend marlin` is a silent-failure landmine for anyone who omits it.
+- A misconfigured FP4 MoE backend fails SILENTLY (`!!!!!` output, no crash), so backend selection is the first thing to check on garbage output.
 
 Neutral / open:
 - All numbers in this ADR are inferred. The `MODEL.md` auto-benchmark hook (prefill
@@ -214,7 +239,8 @@ Neutral / open:
 
 1. **Real bandwidth.** 221 vs 273 GB/s — measure it. Model-sizing guidance in
    `docs/hardware/NVIDIA-Spark.md` depends on which is true.
-2. **NVFP4 vs FP8 for the VL model.** Given MoE runs Marlin W4A16 anyway, does
+2. **NVFP4 vs FP8 for the VL model.** With b12x giving native FP4, NVFP4 should
+   now win clearly — but does
    FP8 (official Qwen checkpoint, fewer unknowns) actually lose to community
    NVFP4 on this box? Decide by benchmark, not by bit-width.
 3. **Does the community `ig1` NVFP4 VL checkpoint work at all on sm_121?** It was

@@ -13,7 +13,7 @@ Reference the log file, do not parse it or reproduce it here.
 | NN | step                | status  | updated_utc       | log                            | summary |
 |----|---------------------|---------|-------------------|--------------------------------|---------|
 | 01 | venv-cuda13         | PENDING | 2026-08-03T00:00Z | logs/01-venv-cuda13.log        | build .venv against CUDA 13 (--profile cu13); everything downstream imports from it |
-| 02 | vllm-serving        | PENDING | 2026-08-03T00:00Z | logs/02-vllm-serving.log        | vLLM >=0.19 serving the NVFP4 Qwen3-VL MoE on :8080, --moe-backend marlin |
+| 02 | vllm-serving        | PENDING | 2026-08-03T00:00Z | logs/02-vllm-serving.log        | vLLM v0.22.x serving NVFP4 Qwen3-VL MoE on :8080, --moe-backend flashinfer (b12x native FP4) |
 | 03 | embedder-service    | PENDING | 2026-08-03T00:00Z | logs/03-embedder-service.log   | BGE-M3 on CUDA behind :8090/embed, 1024-dim dense + sparse, EN+CS |
 | 04 | qdrant-ingester     | PENDING | 2026-08-03T00:00Z | logs/04-qdrant-ingester.log    | Qdrant up + corpus ingested through the FROZEN parser, dense+sparse schema |
 | 05 | mcp-placement       | BLOCKED | 2026-06-18T11:30Z | logs/05-mcp-placement.log      | no OpenNebula access in PoC; ON creds+reachability deferred to deployment (ADR-0003) |
@@ -161,15 +161,25 @@ Serve the generative LLM with **vLLM** on the OpenAI-compatible endpoint
 > the AMD box. The *endpoint contract* is deliberately identical, which is why
 > nothing above the serving layer changes.
 
-**READ THIS BEFORE ANYTHING ELSE — the sm_121 trap.** GB10 is compute capability
-**12.1**, not 12.0. FlashInfer-TRTLLM's FP4 MoE kernels gate on SM100+ and reject
-it; the CUTLASS FP4 GEMM fallback fails on sm_120/121. The working MoE path is
-**Marlin W4A16**, so `--moe-backend marlin` is **mandatory**. Omit it and vLLM
-starts cleanly, loads the model, and then generates streams of `!!!!!` — a silent
-numerical failure, not a crash. **If output is garbage, check this first.**
+**READ THIS BEFORE ANYTHING ELSE — the sm_121 backend choice.** GB10 is compute
+capability **12.1**, not 12.0, and a misconfigured NVFP4 MoE here fails
+**silently**: vLLM starts cleanly, loads the model, then generates streams of
+`!!!!!`. **If output is garbage, it is a backend/kernel problem first.**
 
-**Preconditions:** step 01 `DONE`. vLLM **≥ 0.19.0** (earlier builds lack working
-sm_121 NVFP4 kernels — community model cards citing v0.13.0 predate that work).
+Two backends, and the safe-looking one is slow:
+- **`--moe-backend flashinfer`** (b12x) — **the target**. Native tensor-core FP4 on
+  sm_121 (~356 TFLOPS measured) via vLLM PR #40082 (2026-05-20) + CUTLASS #3096's
+  `compute_120f` fix, which requires **CUDA 13.0** (step 01 gives us that).
+- **`--moe-backend marlin`** — **fallback only**. Dequantizes FP4→BF16, forfeits the
+  FP4 speedup. Use if b12x fails on our checkpoint, and SAY SO in the summary.
+  Do not enable MTP on this path (measured -22%).
+
+Older sources (and an earlier revision of ADR-0013) call marlin *mandatory* because
+GB10 "has no native FP4" — **stale**, pre-May-2026. See ADR-0013's correction note.
+
+**Preconditions:** step 01 `DONE` (it supplies CUDA 13.0). Use a **current stable
+vLLM (v0.22.x)** — the "≥0.19.0" floor predates #40082, and community model cards
+citing v0.13.0 predate all of it.
 
 **Model selection (ADR-0013 §2), in preference order.** Try (a); fall back to (b)
 if it will not load or produces garbage *with* marlin set:
@@ -184,8 +194,9 @@ Record which one you actually served, and why, in the step summary and in
 cd ~dave/ragfarm
 source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); pip + HF fetch need egress
 
-# 1. vLLM into the step-01 venv. Pin >= 0.19.0; record the resolved version.
-.venv/bin/pip install -U 'vllm>=0.19.0'
+# 1. vLLM into the step-01 venv. Current stable (needs PR #40082, 2026-05-20);
+#    record the resolved version — it decides whether b12x FP4 is available.
+.venv/bin/pip install -U 'vllm>=0.22.0'
 .venv/bin/python -c "import vllm; print('vllm', vllm.__version__)"
 
 # 2. fetch the NVFP4 checkpoint (safetensors; latest revision, fastest format)
@@ -195,15 +206,19 @@ p = snapshot_download("ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4")
 print("snapshot:", p)
 PY
 
-# 3. serve. --moe-backend marlin is NOT optional (see the trap above).
+# 3. serve. Try flashinfer (native FP4) FIRST; fall back to marlin only if it
+#    fails, and record which one you ended up on.
 #    --max-model-len is capped deliberately: the 30B-A3B does not fit at full
 #    context alongside the reranker and embedder on shared unified memory.
 .venv/bin/vllm serve <resolved-snapshot-path-or-repo-id> \
   --served-model-name qwen3-vl-30b-a3b \
   --host 127.0.0.1 --port 8080 \
-  --moe-backend marlin \
+  --moe-backend flashinfer \
   --enable-auto-tool-choice --tool-call-parser hermes \
   --max-model-len 32768
+# If that produces `!!!!!` output or fails to init the grouped GEMM, retry with
+#   --moe-backend marlin
+# and note the downgrade (it costs the FP4 speedup) in the step summary.
 
 # 4. probe: endpoint, then a real generation, then TOOL CALLING specifically
 curl -s 127.0.0.1:8080/v1/models

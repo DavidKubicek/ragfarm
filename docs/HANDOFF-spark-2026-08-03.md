@@ -53,15 +53,27 @@ hybrid retrieval pipeline behind the `search_corpus` tool.
 
 **GB10 is sm_121, not sm_120, and it has no usable native FP4 compute path.**
 
-`--moe-backend marlin` is **mandatory** when serving an NVFP4 MoE on vLLM here.
-Omit it and vLLM starts fine, loads the model fine, and then emits streams of
-`!!!!!`. It is a silent numerical failure, not a crash, and it will cost you hours
-if you do not know it. **If generation output is garbage, check this first.**
+A misconfigured NVFP4 MoE on GB10 fails **silently**: vLLM starts fine, loads the
+model fine, then emits streams of `!!!!!`. Not a crash. **If generation output is
+garbage, it is a backend/kernel problem first, a model problem second.**
 
-Consequence for expectations: NVFP4's win on this box is **bandwidth, capacity and
-numerics-at-equal-footprint** — not tensor-core throughput. The large decode win
-comes from the model being **MoE** (≈3B active of 30B), not from FP4. Full
-reasoning in ADR-0013.
+The backend is a **choice**, and picking the safe-looking one costs you real speed:
+
+- **`--moe-backend flashinfer`** (b12x) is the **target** — native tensor-core FP4
+  on sm_121 (~356 TFLOPS measured). Needs vLLM containing PR #40082 (2026-05-20)
+  and **CUDA 13.0** for `compute_120f`. Use a **current stable vLLM (v0.22.x)**;
+  the "≥0.19.0" floor predates #40082.
+- **`--moe-backend marlin`** is the **fallback only** — it dequantizes FP4→BF16 and
+  forfeits the FP4 speedup. Don't enable MTP on it (-22%).
+
+You will find sources (including an earlier revision of ADR-0013) saying marlin is
+*mandatory* because GB10 "has no native FP4". **That is stale**, describing the
+pre-May-2026 toolchain. Corrected in ADR-0013 with the reasoning.
+
+Expectations: NVFP4 on b12x should be **meaningfully faster than Q4_K_M**, most
+visibly on prefill — llama.cpp's Q4_K_M always dequantizes to BF16 and has no
+native 4-bit compute path. Decode stays bandwidth-bound, where the MoE active
+parameter count (≈3B of 30B) dominates. **Measure both.**
 
 ---
 

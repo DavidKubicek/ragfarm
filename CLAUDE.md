@@ -41,20 +41,31 @@ total — which is why the target is an MoE and never a dense 70B. All three GPU
 consumers share one memory pipe; there is no separate VRAM to hide in. Argue every
 "just add another model" against that budget.
 
-**The sm_121 FP4 trap — read this before debugging any garbage output.** GB10 is
-sm_121, *not* sm_120. FlashInfer-TRTLLM's FP4 MoE kernels gate on SM100+ and
-reject 12.x; the CUTLASS FP4 GEMM fallback fails on sm_120/121. The working MoE
-path is **Marlin W4A16**, so **`--moe-backend marlin` is mandatory**. Omit it and
-the model loads cleanly, then emits streams of `!!!!!` — a silent numerical
-failure, not a crash. Check this **first** when output is garbage. Full reasoning
-in ADR-0013.
+**The sm_121 FP4 backend choice — read before debugging any garbage output.** GB10
+is sm_121, *not* sm_120, and a misconfigured NVFP4 MoE here fails **silently**: the
+model loads cleanly and then emits streams of `!!!!!` rather than crashing. So
+garbage output is a backend/kernel problem first, a model problem second.
+
+- **Target `--moe-backend flashinfer`** (the b12x path). vLLM PR #40082
+  (2026-05-20) added native FP4 MoE for SM120/121 and CUTLASS #3096 fixed the
+  grouped-GEMM garbage bug via `compute_120f`, which needs **CUDA 13.0** — which is
+  exactly our target. This gives real tensor-core FP4 (~356 TFLOPS measured).
+- **`--moe-backend marlin` is the FALLBACK**, not the default. It dequantizes
+  FP4→BF16 and forfeits the FP4 speedup. Use it only if b12x fails on our
+  checkpoint, and say so in the step summary. Do not enable MTP on it (-22%).
+- **Use a current stable vLLM (v0.22.x), not merely ≥0.19.0** — #40082 landed after
+  the 0.19 floor.
+
+Full reasoning, including the superseded "marlin is mandatory" advice and why it
+was wrong, in ADR-0013.
 
 ### Models and how to engage them
 - **Generative LLM:** `Qwen3-VL-30B-A3B-Instruct`, **NVFP4** safetensors, served by
-  **vLLM ≥ 0.19.0** on `127.0.0.1:8080`, OpenAI-compatible, with
+  **vLLM v0.22.x (current stable)** on `127.0.0.1:8080`, OpenAI-compatible, with
   `--enable-auto-tool-choice --tool-call-parser hermes` for tool calling and
-  `--moe-backend marlin`. Cap context with `--max-model-len`. This is the model the
-  agent/gateway drives, and the one all tuning happens on.
+  `--moe-backend flashinfer` (marlin only as fallback). Cap context with
+  `--max-model-len`. This is the model the agent/gateway drives, and the one all
+  tuning happens on.
 - **Reranker:** `bge-reranker-v2-m3` at full quality on a llama.cpp CUDA
   `llama-server --reranking`, `127.0.0.1:8081/reranking` (ADR-0008). Never shrink
   it to buy bandwidth — that trades retrieval precision for latency, the wrong way
