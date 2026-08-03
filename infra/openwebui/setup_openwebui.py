@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """Idempotent Open WebUI configuration for the ragfarm agent layer (ADR-0003).
 
-Registers the mcpo OpenAPI tool server(s) and creates TWO OWUI model presets:
-  - "ragfarm"        — text engine (tables + code + mermaid, greedy sampler).
-  - "ragfarm-vision" — vision engine (image input, draw.io HTML render, temp>=0.6
-                       sampler — Qwen3-VL Thinking requires non-greedy per Qwen's
-                       own guidance; determinism knobs like top_k / top_p / min_p /
-                       seed are DROPPED so llama.cpp's defaults apply).
-Both presets get the same tools (rag + placement + reboot_guarded) so either engine
-can drive the infra. Only one llama-server model is loaded at a time (the wrapper's
---alias); the preset whose base_model_id matches the live alias is the one that
-actually works — the other stays as a stored config waiting for a model swap.
+Registers the mcpo OpenAPI tool server(s) and upserts the OWUI model presets
+described by MODEL_TUNING.
 
-Auto-detection: the vision preset's base_model_id defaults to whatever /v1/models
-reports as `multimodal`, so it tracks scripts/activate-llm.sh / .env swaps without
-manual config. Overridable via VISION_BASE_MODEL_ID / TEXT_BASE_MODEL_ID env.
+>>> TO CHANGE ANY PER-MODEL SETTING, EDIT `MODEL_TUNING` NEAR THE TOP OF THIS
+>>> FILE. Nothing else needs touching. It is keyed by the model ALIAS — the id the
+>>> inference server advertises on /v1/models (llama.cpp `--alias`, vLLM
+>>> `--served-model-name`) — so settings for several models sit side by side and
+>>> the served model selects its own. The long system-prompt bodies live further
+>>> down as GROUNDING_SYSTEM / VISION_GROUNDING_SYSTEM and are referenced by the
+>>> table's `prompt` key; every tunable knob is in the table.
+
+Every preset gets the same tools (rag + placement + reboot_guarded) so whichever
+engine is served can drive the infra. Only one model is served at a time; the
+preset whose base_model_id matches the live alias is the usable one, and the rest
+stay as stored config awaiting a model swap.
+
+Aliases may share a `preset_id` on purpose (the 8B and 30B VL models both drive
+"ragfarm-vision"), in which case the live one wins and the collapse is announced —
+the upsert keys on preset_id, so writing both would otherwise be last-one-wins.
+
+Flags:
+  --only-active   write just the preset for the currently-served model.
 
 Open WebUI stores this in its Docker volume, so it survives restarts; this script
 is the reproducible source of that config (re-run any time / against a fresh UI).
@@ -27,12 +35,13 @@ Usage (from the host, with the stack up):
     OWUI_EMAIL=admin@ragfarm.local OWUI_PASSWORD=... \
     python3 infra/openwebui/setup_openwebui.py
 
-Config knobs (env, with sensible defaults):
+Config knobs (env). Model settings are NOT here — they are in MODEL_TUNING:
     MCPO_RAG_URL           default http://127.0.0.1:8000/rag
-    LLAMA_URL              default http://127.0.0.1:8080 (for vision auto-detect)
-    TEXT_BASE_MODEL_ID     default qwen2.5-7b-instruct (the greedy text preset)
-    VISION_BASE_MODEL_ID   default auto (query LLAMA_URL /v1/models, first with
-                           capability "multimodal"; falls back to qwen_qwen3-vl-8b-thinking)
+    MCPO_PLACEMENT_URL     default http://127.0.0.1:8000/placement
+    LLAMA_URL              default http://127.0.0.1:8080 (queried for the live alias)
+    FALLBACK_ALIAS         used when the served alias matches no MODEL_TUNING entry
+    TEXT_BASE_MODEL_ID     optional PIN; forces this alias instead of autodetect
+    VISION_BASE_MODEL_ID   optional PIN; takes precedence over TEXT_BASE_MODEL_ID
 """
 import os
 import sys
@@ -43,32 +52,135 @@ URL = os.environ.get("OWUI_URL", "http://127.0.0.1:3000").rstrip("/")
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080").rstrip("/")
 MCPO_RAG_URL = os.environ.get("MCPO_RAG_URL", "http://127.0.0.1:8000/rag")
 MCPO_PLACEMENT_URL = os.environ.get("MCPO_PLACEMENT_URL", "http://127.0.0.1:8000/placement")
-# TEXT_BASE_MODEL_ID accepts the historical BASE_MODEL_ID as a fallback so old
-# invocations that set BASE_MODEL_ID keep working unchanged.
-TEXT_BASE_MODEL_ID = os.environ.get("TEXT_BASE_MODEL_ID") or os.environ.get("BASE_MODEL_ID", "qwen2.5-7b-instruct")
-VISION_BASE_MODEL_ID_ENV = os.environ.get("VISION_BASE_MODEL_ID")  # None -> auto-detect
+# Optional alias PINS. Normally unset: the served alias is autodetected from
+# /v1/models and matched against MODEL_TUNING. Setting either forces that alias.
+# `BASE_MODEL_ID` is accepted as the historical spelling of TEXT_BASE_MODEL_ID.
+TEXT_BASE_MODEL_ID_ENV = os.environ.get("TEXT_BASE_MODEL_ID") or os.environ.get("BASE_MODEL_ID")
+VISION_BASE_MODEL_ID_ENV = os.environ.get("VISION_BASE_MODEL_ID")
 # host-control is bridged by mcpo but deliberately NOT registered as an OWUI tool
 # server; the model reaches reboot only through the reboot_guarded Python Tool.
 REBOOT_TOOL_PY = pathlib.Path(__file__).with_name("tools") / "reboot_guarded.py"
 
 
-def _detect_vision_model_id(default: str) -> str:
-    """Ask llama-server which model is loaded; return its alias iff it advertises
-    the `multimodal` capability. Falls back to `default` if llama-server is down or
-    the loaded model isn't a vision one (harmless — the preset just points at a
-    stored id that isn't live right now)."""
-    if VISION_BASE_MODEL_ID_ENV:
-        return VISION_BASE_MODEL_ID_ENV
-    try:
-        r = requests.get(f"{LLAMA_URL}/v1/models", timeout=5)
-        r.raise_for_status()
-        for m in r.json().get("models", []):
-            caps = m.get("capabilities") or []
-            if "multimodal" in caps or "vision" in caps:
-                return m.get("model") or m.get("id") or default
-    except Exception:
-        pass
-    return default
+# ============================================================================
+# MODEL TUNING TABLE — **THE ONE PLACE TO EDIT PER-MODEL SETTINGS**
+# ============================================================================
+# Keyed by the model's ALIAS, i.e. exactly the id the inference server advertises
+# on /v1/models (llama.cpp's --alias, vLLM's --served-model-name). Keying by alias
+# — rather than by preset name — is what keeps settings for several models side by
+# side: swap the served model and the matching entry is what gets applied, with no
+# edits anywhere else in this file.
+#
+# Each entry may set:
+#   preset_id         OWUI model id (stable; this is what upsert keys on)
+#   name              display name in the OWUI model picker
+#   description       shown under the name
+#   prompt            which system-prompt body to use: see PROMPT_BODIES below
+#   params            sampler + agent knobs; MERGED OVER params_common
+#   capabilities      OWUI capability matrix; MERGED OVER caps_common
+#   default_features  per-chat toggles pre-selected in new conversations
+#   builtin_tools     OWUI opt-out map (only false-flagged keys persist)
+#
+# Only DIFFERENCES from the *_common blocks belong in an entry. To add a model,
+# copy an entry and change the alias key — nothing below this table needs touching.
+MODEL_TUNING = {
+    # ---- shared defaults, merged under every entry ------------------------
+    "params_common": {
+        "function_calling": "native",   # schema-side, survives OWUI context compaction
+        "compact_token_threshold": 24000,
+        "stream_response": True,
+        "stream_delta_chunk_size": 1,
+        "use_mmap": True,
+        "use_mlock": True,
+    },
+    "caps_common": {
+        # Matches Workspace -> Model Advanced settings verbatim. Pinned in full
+        # rather than left to default, so re-running this script can never
+        # silently drop code_interpreter or usage (RULE 6 + tests/tracing need them).
+        "file_context": True, "vision": False, "file_upload": True,
+        "web_search": False, "image_generation": False, "code_interpreter": True,
+        "terminal": False, "citations": True, "status_updates": True,
+        "usage": True, "builtin_tools": True,
+    },
+    "builtin_tools_common": {
+        # Automations/tasks/web_search OFF: they encourage a Thinking model to
+        # invent multi-step iteration where the single-shot RAG call was already
+        # complete (observed as multi-loop tool traps on the vision preset).
+        # knowledge/calendar OFF because we do not run those backends.
+        "knowledge": False, "calendar": False,
+        "automations": False, "tasks": False, "web_search": False,
+    },
+    "default_features_common": ["code_interpreter"],
+
+    # ---- per-model entries, keyed by served alias -------------------------
+    "models": {
+        # Text engine, greedy + fixed seed. Retired as the default on the Spark
+        # (ADR-0013) but kept so the preset still resolves if this model is served.
+        "qwen2.5-7b-instruct": {
+            "preset_id": "ragfarm",
+            "name": "ragfarm (corpus RAG + infra)",
+            "description": "Text engine: greedy Qwen2.5-7B with corpus retrieval, "
+                           "OpenNebula placement, and guarded host reboot.",
+            "prompt": "text",
+            "params": {
+                # determinism (greedy, fixed seed)
+                "temperature": 0, "top_k": 1, "top_p": 0, "min_p": 0, "seed": 42,
+                "frequency_penalty": 0, "presence_penalty": 0,
+                "repeat_penalty": 1, "repeat_last_n": 0,
+                "mirostat": 0, "mirostat_eta": 0, "mirostat_tau": 0, "tfs_z": 1,
+                # Response ceiling — without it OWUI's frontend default (~2-4k)
+                # truncates long FW-rules tables mid-value.
+                "max_tokens": 8192,
+            },
+        },
+
+        # Vision engine (outgoing AMD box). Qwen3-VL Thinking forbids greedy decode
+        # — sampler-shape knobs (top_k/top_p/min_p/seed) are deliberately ABSENT so
+        # the server's own nucleus-sampling defaults apply.
+        "qwen_qwen3-vl-8b-thinking": {
+            "preset_id": "ragfarm-vision",
+            "name": "ragfarm-vision (Qwen3-VL + infra + draw.io)",
+            "description": "Vision engine: Qwen3-VL Thinking (non-greedy) with image "
+                           "input, corpus RAG, placement, reboot, and draw.io rendering.",
+            "prompt": "vision",
+            "params": {
+                "temperature": 0.6,
+                # 16k: a Thinking turn must fit reasoning + tool call + full table.
+                # Too low and <think> burns the budget before the tool call is emitted.
+                "max_tokens": 16384,
+            },
+            "capabilities": {
+                "vision": True,
+                # file_context OFF: OWUI prepends `<attached_files>...` as TEXT in
+                # ADDITION to routing image bytes through the vision encoder. That
+                # dual signal put Qwen3-VL-Thinking into a metacognitive loop
+                # ("am I looking at an XML description or the real image?").
+                "file_context": False,
+            },
+        },
+
+        # PRIMARY on the DGX Spark (ADR-0013). Served by vLLM as an NVFP4 MoE.
+        # Sampler values follow Qwen3-VL guidance; re-tune against the real model —
+        # a 30B MoE may need less prompt scaffolding than the 8B did.
+        "qwen3-vl-30b-a3b": {
+            "preset_id": "ragfarm-vision",
+            "name": "ragfarm-vision (Qwen3-VL 30B-A3B + infra + draw.io)",
+            "description": "Vision engine: Qwen3-VL-30B-A3B NVFP4 on vLLM with image "
+                           "input, corpus RAG, placement, reboot, and draw.io rendering.",
+            "prompt": "vision",
+            "params": {
+                "temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                "max_tokens": 16384,
+            },
+            "capabilities": {"vision": True, "file_context": False},
+        },
+    },
+}
+
+# Applied when the live alias matches no entry in MODEL_TUNING["models"], so a
+# freshly-swapped model still gets a usable preset instead of silently none.
+FALLBACK_ALIAS = os.environ.get("FALLBACK_ALIAS", "qwen3-vl-30b-a3b")
+
 
 # One system prompt, five independently-scoped rules (RULE N). Tuned for a quantized
 # 7B: short, imperative, concrete triggers, one instruction per line, no meta-rationale
@@ -131,47 +243,6 @@ GROUNDING_SYSTEM = (
     "  5. If the user's approach is worse than an alternative, say so and explain briefly — then "
     "implement exactly what the user chose. The user's decision always overrules you."
 )
-
-# Advanced params mirrored from the OWUI model UI (Workspace -> Model -> Advanced),
-# captured verbatim from the live model config so re-running this script reproduces
-# the exact tuning. Three groups:
-#   - determinism: greedy decode (temp 0, top_k 1, top_p/min_p 0), fixed seed, all
-#     penalties/mirostat neutralized. Must match the llama-server unit's sampler
-#     flags so the UI path and the raw endpoint decode identically.
-#   - agent behavior: native (schema-side) tool calling so tool specs survive OWUI
-#     context compaction; compact at 24k tokens (well under the 32k llama ctx);
-#     streaming with 1-token deltas.
-#   - memory: mmap + mlock the weights resident.
-MODEL_PARAMS = {
-    "system": GROUNDING_SYSTEM,
-    "function_calling": "native",
-    # determinism (greedy, fixed seed)
-    "temperature": 0,
-    "top_k": 1,
-    "top_p": 0,
-    "min_p": 0,
-    "seed": 42,
-    "frequency_penalty": 0,
-    "presence_penalty": 0,
-    "repeat_penalty": 1,
-    "repeat_last_n": 0,
-    "mirostat": 0,
-    "mirostat_eta": 0,
-    "mirostat_tau": 0,
-    "tfs_z": 1,
-    # Response ceiling — needed for FW-rules markdown tables (~600 tokens) etc.
-    # Without this OWUI's frontend applies a modest default (~2-4k) that
-    # truncates long tabular answers mid-value. 8k leaves room for the 6-row
-    # FW table + tool call + Source citation with comfortable headroom.
-    "max_tokens": 8192,
-    # client-side agent behavior
-    "compact_token_threshold": 24000,
-    "stream_response": True,
-    "stream_delta_chunk_size": 1,
-    # keep weights resident
-    "use_mmap": True,
-    "use_mlock": True,
-}
 
 
 # ============================================================================
@@ -305,31 +376,116 @@ VISION_GROUNDING_SYSTEM = (
 )
 
 
-VISION_MODEL_PARAMS = {
-    "system": VISION_GROUNDING_SYSTEM,
-    "function_calling": "native",
-    # Non-greedy sampling required by Qwen3-VL Thinking. temp 0.6 is Qwen's own
-    # recommended floor; top_k/top_p/min_p/seed intentionally OMITTED so llama.cpp's
-    # defaults (nucleus sampling) apply — mixing an explicit temp with hand-set
-    # sampler-shape knobs re-introduces the determinism trap this preset is meant
-    # to avoid.
-    "temperature": 0.6,
-    # Response ceiling. Without this the OWUI front-end applies its modest built-in
-    # default (~2-4k), which starves a Thinking-model turn — the <think> block burns
-    # through the budget before the tool_call is ever emitted (observed 2026-07-27:
-    # contacts prompt cut off mid-sentence inside reasoning, never called the tool).
-    # 16k leaves comfortable room for reasoning + tool call + full markdown-table answer,
-    # while staying half of the wrapper's -c 32768 context so multi-turn history has room.
-    # (OpenAI-compat key; llama.cpp honors it directly, no num_predict remap needed.)
-    "max_tokens": 16384,
-    # client-side agent behavior — matches text preset's 24000 (wrapper ctx 32768).
-    "compact_token_threshold": 24000,
-    "stream_response": True,
-    "stream_delta_chunk_size": 1,
-    # keep weights resident
-    "use_mmap": True,
-    "use_mlock": True,
+# ---------------------------------------------------------------------------
+# Resolution: alias -> the fully-merged preset MODEL_TUNING describes.
+# ---------------------------------------------------------------------------
+# The long prose bodies stay as module-level names above (scripts/agent.py and
+# scripts/trace_tool_calls.py import GROUNDING_SYSTEM by name — do not rename),
+# and MODEL_TUNING selects between them by key. Prose lives below, knobs live at
+# the top; that is the split.
+PROMPT_BODIES = {
+    "text": GROUNDING_SYSTEM,
+    "vision": VISION_GROUNDING_SYSTEM,
 }
+
+
+def resolve_preset(alias: str) -> dict:
+    """Merge MODEL_TUNING's shared defaults with the entry for `alias` and return
+    a ready-to-POST preset dict. Raises KeyError for an unknown prompt body — a
+    typo there is a bug, not something to paper over with a default."""
+    models = MODEL_TUNING["models"]
+    entry = models[alias]
+    params = {**MODEL_TUNING["params_common"], **entry.get("params", {})}
+    params["system"] = PROMPT_BODIES[entry["prompt"]]
+    return {
+        "preset_id": entry["preset_id"],
+        "base_model_id": alias,
+        "name": entry["name"],
+        "description": entry["description"],
+        "params": params,
+        "capabilities": {**MODEL_TUNING["caps_common"], **entry.get("capabilities", {})},
+        "default_features": entry.get("default_features", MODEL_TUNING["default_features_common"]),
+        "builtin_tools": entry.get("builtin_tools", MODEL_TUNING["builtin_tools_common"]),
+    }
+
+
+def live_aliases() -> list[str]:
+    """Aliases the inference server currently advertises on /v1/models.
+
+    Engine-agnostic on purpose: llama.cpp reports `--alias`, vLLM reports
+    `--served-model-name`, and both answer the same OpenAI-compatible route — which
+    is exactly the seam ADR-0013 relies on. Returns [] if the server is unreachable,
+    which is not fatal: presets are stored config and can be written ahead of the
+    model being up.
+    """
+    try:
+        r = requests.get(f"{LLAMA_URL}/v1/models", timeout=5)
+        r.raise_for_status()
+        payload = r.json()
+        # OpenAI shape is {"data": [{"id": ...}]}; llama.cpp also emits {"models": [...]}.
+        rows = payload.get("data") or payload.get("models") or []
+        return [m.get("id") or m.get("model") for m in rows if (m.get("id") or m.get("model"))]
+    except Exception:
+        return []
+
+
+def select_aliases() -> tuple[list[str], str | None]:
+    """Decide which MODEL_TUNING entries to apply, and which one is live.
+
+    Default is to write EVERY configured preset, so swapping the served model does
+    not require re-running this script. `--only-active` narrows it to the live one.
+    Env override: TEXT_BASE_MODEL_ID / VISION_BASE_MODEL_ID still pin a specific
+    alias if set, for the historical invocations that rely on them.
+    """
+    models = MODEL_TUNING["models"]
+    configured = list(models)
+
+    # Env pin wins over autodetect, so the historical TEXT_BASE_MODEL_ID /
+    # VISION_BASE_MODEL_ID invocations keep working: setting one forces that alias
+    # to be treated as live. It must still name a configured alias — silently
+    # inventing a preset for an unknown alias would defeat the table.
+    pinned = next((v for v in (VISION_BASE_MODEL_ID_ENV, TEXT_BASE_MODEL_ID_ENV) if v), None)
+    if pinned:
+        if pinned in configured:
+            print(f"NOTE: alias pinned to '{pinned}' by env; skipping autodetect.")
+            return ([pinned] if "--only-active" in sys.argv else configured), pinned
+        print(f"WARNING: pinned alias '{pinned}' has no MODEL_TUNING entry — ignoring it.")
+
+    live = [a for a in live_aliases() if a in configured]
+    active = live[0] if live else None
+
+    if active is None:
+        served = live_aliases()
+        if served:
+            print(f"NOTE: served alias(es) {served} have no MODEL_TUNING entry; "
+                  f"add one keyed by that alias. Falling back to '{FALLBACK_ALIAS}'.")
+            active = FALLBACK_ALIAS if FALLBACK_ALIAS in configured else None
+        else:
+            print(f"NOTE: {LLAMA_URL} unreachable — writing all presets blind; "
+                  f"none marked live.")
+
+    if "--only-active" in sys.argv:
+        return ([active] if active else []), active
+
+    # Several aliases may legitimately share a preset_id — e.g. the 8B and 30B VL
+    # models both drive "ragfarm-vision", so the UI keeps ONE vision preset that
+    # follows whichever model is served. Since the upsert keys on preset_id, writing
+    # both would mean "last one wins" silently. Collapse per preset_id, preferring
+    # the live alias, and say so rather than resolving it invisibly.
+    by_preset: dict[str, list[str]] = {}
+    for a in configured:
+        by_preset.setdefault(models[a]["preset_id"], []).append(a)
+
+    chosen = []
+    for preset_id, group in by_preset.items():
+        pick = active if (active in group) else group[0]
+        if len(group) > 1:
+            others = [a for a in group if a != pick]
+            why = "live" if pick == active else "first configured; none of them is live"
+            print(f"NOTE: preset '{preset_id}' is claimed by {len(group)} aliases "
+                  f"{group}; writing '{pick}' ({why}), skipping {others}.")
+        chosen.append(pick)
+    return chosen, active
 
 
 def get_token() -> str:
@@ -386,94 +542,44 @@ def main() -> None:
     r.raise_for_status()
     print("python tool 'reboot_guarded' ready")
 
-    # 3. Create/update BOTH model presets (text + vision). Same tools on both so
-    #    whichever llama-server model is loaded can drive the infra; only the
-    #    preset whose base_model_id matches the live alias is actually usable at
-    #    any given moment (see module docstring).
+    # 3. Create/update the model presets described by MODEL_TUNING. Same tools on
+    #    every preset so whichever model is served can drive the infra; only the
+    #    preset whose base_model_id matches the live alias is usable right now.
     tool_ids = server_ids + ["reboot_guarded"]
 
-    # Capability matrix per preset — matches Workspace -> Model Advanced settings
-    # verbatim (screenshot committed 2026-07-26). Only `vision` differs between
-    # presets (VL model only); file_upload is on for BOTH so both engines can
-    # accept files, image_generation stays OFF (OWUI's built-in image gen depends
-    # on an external DALL-E/SD backend we don't run). Re-running this script MUST
-    # NOT silently drop code_interpreter or usage (RULE 6 + tests/tracing depend
-    # on them), so we pin the whole set here rather than let anything default.
-    caps_text = {
-        "file_context": True, "vision": False, "file_upload": True,
-        "web_search": False, "image_generation": False, "code_interpreter": True,
-        "terminal": False, "citations": True, "status_updates": True,
-        "usage": True, "builtin_tools": True,
-    }
-    # Vision preset overrides:
-    #   vision: True   — obviously, this is the point
-    #   file_context: False — OWUI's file_context path prepends `<attached_files>
-    #     <file url="..." name="..."/></attached_files>` as TEXT to the user
-    #     message, IN ADDITION to routing the image bytes through the vision
-    #     encoder. On Qwen3-VL-Thinking that dual signal caused a metacognitive
-    #     loop ("is the user showing me an XML file description or the real image?
-    #     Wait, actually, let me re-check…") — observed 2026-07-27, model stuck
-    #     in <think> re-debating whether it's looking at text or vision tokens.
-    #     Turning file_context off makes image uploads vision-only. Non-image
-    #     files (PDF/DOCX) belong on the text preset anyway.
-    caps_vision = {**caps_text, "vision": True, "file_context": False}
+    aliases, active = select_aliases()
+    if not aliases:
+        sys.exit("No presets to write (--only-active with no live/known alias).")
 
-    # Default Features (defaultFeatureIds) — per-chat toggles pre-selected in new
-    # conversations. Code interpreter only — web_search removed (its capability is
-    # off across both presets, and pre-checking it just presents a broken affordance).
-    default_features = ["code_interpreter"]
-
-    # Builtin Tools (builtinTools) — OWUI's opt-out convention: only false-flagged
-    # keys are persisted; absent keys default to ENABLED. Automations / tasks /
-    # web_search are explicitly OFF because they encourage the Thinking model to
-    # invent multi-step iteration where the single-shot RAG call was already
-    # complete (observed on the ragfarm-vision preset — multi-loop tool traps).
-    # Knowledge and Calendar OFF because we don't run those backends.
-    builtin_tools = {"knowledge": False, "calendar": False,
-                     "automations": False, "tasks": False, "web_search": False}
-
-    vision_base = _detect_vision_model_id(default="qwen_qwen3-vl-8b-thinking")
-
-    presets = [
-        {
-            "id": "ragfarm",
-            "base_model_id": TEXT_BASE_MODEL_ID,
-            "name": "ragfarm (corpus RAG + infra)",
-            "description": "Text engine: greedy Qwen2.5-7B with corpus retrieval, OpenNebula placement, and guarded host reboot.",
-            "params": MODEL_PARAMS,
-            "capabilities": caps_text,
-        },
-        {
-            "id": "ragfarm-vision",
-            "base_model_id": vision_base,
-            "name": "ragfarm-vision (Qwen3-VL + infra + draw.io)",
-            "description": "Vision engine: Qwen3-VL Thinking (temp>=0.6, non-greedy) with image input, corpus RAG, placement, reboot, and draw.io in-chat rendering.",
-            "params": VISION_MODEL_PARAMS,
-            "capabilities": caps_vision,
-        },
-    ]
-
-    for p in presets:
+    for alias in aliases:
+        p = resolve_preset(alias)
         body = {
-            "id": p["id"],
+            "id": p["preset_id"],
             "base_model_id": p["base_model_id"],
             "name": p["name"],
             "meta": {
                 "description": p["description"],
                 "toolIds": tool_ids,
                 "capabilities": p["capabilities"],
-                "defaultFeatureIds": default_features,
-                "builtinTools": builtin_tools,
+                "defaultFeatureIds": p["default_features"],
+                "builtinTools": p["builtin_tools"],
             },
             "params": p["params"],
             "access_grants": [],
             "is_active": True,
         }
+        # Idempotent upsert: create, and on any non-200 fall back to update. Same
+        # contract as before — re-running this script converges rather than dupes.
         r = requests.post(URL + "/api/v1/models/create", headers=H, json=body, timeout=30)
         if r.status_code != 200:
             r = requests.post(URL + "/api/v1/models/model/update", headers=H, json=body, timeout=30)
         r.raise_for_status()
-        print(f"model preset '{p['id']}' ready (tools={tool_ids}, base={p['base_model_id']})")
+        mark = "  <- LIVE" if alias == active else ""
+        print(f"preset '{p['preset_id']}' ready (alias={alias}, tools={tool_ids}){mark}")
+
+    if active is None:
+        print("WARNING: no preset matches a served model — check the alias the "
+              "inference server advertises against MODEL_TUNING['models'] keys.")
 
 
 if __name__ == "__main__":
