@@ -80,6 +80,12 @@ if __name__ == "__main__":
         # bin/python is typically a SYMLINK to the base interpreter, so comparing
         # resolved paths makes them look identical and the hand-off never fires.
         # What distinguishes them is site-packages, which resolve() cannot see.
+        #
+        # (Why the shebang is `python3` and not `python`: this box has no
+        # /usr/bin/python and no python-is-python3, so `env python` resolves ONLY
+        # when a venv is already on PATH. Under a systemd-style PATH it dies with
+        # "env: 'python': No such file or directory". `python3` always resolves,
+        # and this re-exec then upgrades to the venv for python-dotenv.)
         if _venv_py.exists() and os.environ.get("_RAGFARM_ENV_REEXEC") != "1":
             os.environ["_RAGFARM_ENV_REEXEC"] = "1"
             os.execv(str(_venv_py), [str(_venv_py), os.path.abspath(__file__), *sys.argv[1:]])
