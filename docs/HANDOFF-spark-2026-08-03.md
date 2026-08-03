@@ -31,7 +31,7 @@ the wrong machine code here — this is not tidiness, it is correctness.
 | path | verdict | why |
 |---|---|---|
 | `.venv/` (~1.8 G) | **DELETE — mandatory** | x86_64 wheels; cannot execute on aarch64 |
-| `~/llama.cpp/build/` | **DELETE — mandatory** | same; rebuild from source for aarch64 |
+| `~/llama.cpp/build/` | **DELETE — mandatory** | x86_64 binaries. Rebuild with **CUDA**, not Vulkan — step 01 does this. llama.cpp is still needed on the Spark: ADR-0013 keeps the **reranker** on it, and `fetch-encoder.sh` needs its `convert_hf_to_gguf.py` |
 | `models/llm/*` (~16 G) | **DELETE** | all GGUF for llama.cpp. The Spark serves **NVFP4 safetensors on vLLM** — wrong format *and* wrong engine |
 | `models/embeddings/bge-m3` (~2.2 G) | delete (recommended) | arch-independent data, so it *would* work — but keeping it means step 03's fetch fragment never runs, and an unexercised fragment is an unverified one |
 | `models/reranker/*` (~1.1 G) | delete (recommended) | same reasoning; GGUF data is fine on aarch64, but exercise the fetch path |
@@ -156,8 +156,17 @@ ConnectX-7 — see `docs/hardware/NVIDIA-Spark.md`.
 | drawio-viewer | `0.0.0.0:80` | container | nginx serving a local draw.io mirror + `tests/fixtures/`. |
 
 **systemd units** (`manifests/`): `ragfarm-llama.service` (→ needs replacing with
-`ragfarm-vllm.service`), `ragfarm-reranker.service`, `ragfarm-embedder.service`,
+`ragfarm-vllm.service`; when you do, rename it in the `HOST_UNITS` arrays of BOTH
+`scripts/deploy.sh` and `scripts/stack.sh` or the stack starts a unit with no model
+path), `ragfarm-reranker.service`, `ragfarm-embedder.service`,
 `ragfarm-ingester-watcher.service`, `ragfarm-stack.service` (the compose stack).
+
+**llama.cpp is still required** — vLLM replaced it for *generation* only. The
+cross-encoder reranker runs on `llama-server --reranking` (ADR-0013 §3), and
+`scripts/fetch-encoder.sh` uses its `convert_hf_to_gguf.py` to produce the rerank
+GGUF. `scripts/deploy.sh phase_preflight` hard-fails without both. Build it with
+`-DGGML_CUDA=ON`; `infra/llama/README.md` is the AMD/Vulkan-era doc and is marked
+historical.
 
 **Host prerequisite:** `dave` must be in the `docker` group — `ragfarm-stack.service`
 runs `docker compose` as `User=dave`. This is Dave's to set up (group membership is

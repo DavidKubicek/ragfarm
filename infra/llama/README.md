@@ -1,3 +1,16 @@
+> **HISTORICAL — AMD/iGPU era (ADR-0001, SUPERSEDED by ADR-0013).**
+> Everything below targets llama.cpp + **Vulkan** on a Radeon 890M. On the DGX
+> Spark (GB10, sm_121, aarch64) that is wrong: generation moved to **vLLM**, and
+> llama.cpp survives only for the **cross-encoder reranker**, built with **CUDA**:
+>
+> ```bash
+> cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=121
+> cmake --build build --config Release -j"$(nproc)"
+> build/bin/llama-server --list-devices   # must show a CUDA device
+> ```
+>
+> Do NOT `apt-get install libvulkan-dev` on the Spark. See BUILD_STATE.md step 01.
+
 # iGPU llama.cpp + Vulkan on Radeon 890M — TWO servers
 
 Per ADR-0001 we run llama.cpp on the **iGPU via Vulkan** (not ROCm, which is

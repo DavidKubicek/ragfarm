@@ -62,6 +62,10 @@ COMPOSE="docker compose -f infra/compose.yaml"
 MANIFESTS="manifests"
 SYSTEMD_DIR="/etc/systemd/system"
 # host-plane units (systemd) and the stack/watcher units, in the order they matter
+# NOTE (ADR-0013): ragfarm-llama.service is the retired llama.cpp GENERATION unit.
+# Step 02 replaces it with ragfarm-vllm.service — rename it in BOTH this list and
+# scripts/stack.sh when that unit is created, or the stack tries to start a unit
+# with no model path. llama.cpp itself stays, for the reranker only.
 HOST_UNITS=(ragfarm-llama.service ragfarm-reranker.service ragfarm-embedder.service)
 STACK_UNIT="ragfarm-stack.service"
 WATCH_UNIT="ragfarm-ingester-watcher.service"

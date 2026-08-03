@@ -172,7 +172,21 @@ if torch.cuda.is_available():
     print("matmul ok:", bool(torch.isfinite(x @ x).all()))
 PY
 
-# 5. re-freeze the lock WITH the resolved nvidia-* runtime deps and commit it.
+# 5. BUILD llama.cpp WITH CUDA. Still required on the Spark even though vLLM
+#    replaced it for GENERATION: ADR-0013 §3 keeps the cross-encoder reranker on
+#    a llama.cpp `--reranking` server (:8081), and three things hard-depend on it:
+#      - manifests/ragfarm-reranker.service execs $LLAMA_DIR/build/bin/llama-server
+#      - scripts/fetch-encoder.sh:105 needs convert_hf_to_gguf.py for the rerank GGUF
+#      - scripts/deploy.sh phase_preflight (:148) DIES without the binary
+#    Build CUDA, NOT Vulkan — infra/llama/README.md is the AMD/iGPU-era doc.
+git -C ~ clone https://github.com/ggml-org/llama.cpp.git 2>/dev/null || true
+cd ~/llama.cpp && git pull
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=121
+cmake --build build --config Release -j"$(nproc)"
+ls -l ~/llama.cpp/build/bin/llama-server ~/llama.cpp/convert_hf_to_gguf.py
+cd ~dave/ragfarm
+
+# 6. re-freeze the lock WITH the resolved nvidia-* runtime deps and commit it.
 #    The committed cu13 lock was frozen from a CPU venv, so its CUDA runtime deps
 #    are unpinned — until this runs, the lock is not actually reproducible.
 .venv/bin/pip freeze > /tmp/cu13.freeze
@@ -182,12 +196,18 @@ mv /tmp/cu13.new services/requirements.cu13.lock
 git diff --stat services/requirements.cu13.lock
 ```
 
-**Gate:** all four must hold —
+**Gate:** all five must hold —
 1. `.venv/bin/pip check` exits 0 (no broken/conflicting requirements);
 2. the lock-match script prints `LOCK MATCH` and exits 0;
 3. `torch.cuda.is_available()` is `True`, `get_device_capability(0)` returns
    `(12, 1)`, and the CUDA matmul returns finite values;
-4. `services/requirements.cu13.lock` now pins the `nvidia-*` runtime packages
+4. `~/llama.cpp/build/bin/llama-server` exists and is executable, AND
+   `~/llama.cpp/convert_hf_to_gguf.py` exists. Sanity-check the backend actually
+   compiled in: `~/llama.cpp/build/bin/llama-server --list-devices` should report a
+   CUDA device, not "no devices". A Vulkan-only or CPU-only build passes the
+   file-exists test and then serves the reranker at CPU speed — the exact
+   regression ADR-0008 spent a day fixing;
+5. `services/requirements.cu13.lock` now pins the `nvidia-*` runtime packages
    (i.e. the re-freeze actually changed the file) and is committed.
 
 `uname -m` must be `aarch64`. If CUDA 13 or python3.12 is missing → `BLOCKED`.
