@@ -190,7 +190,12 @@ else in a session:
 ### For each step you execute
 1. Refresh the heartbeat: `date +%s > /tmp/ragfarm.lock`.
 2. Run the step's commands exactly as defined in `BUILD_STATE.md`.
-3. Append all of stdout+stderr to a log file `logs/<NN-stepname>.log` (create if missing)
+3. Append all of stdout+stderr to a log file `logs/<NN-stepname>.log`.
+   **Run `mkdir -p logs` first, every time.** `logs/` ships with a tracked
+   `.keep` so a fresh clone has it, but if it is ever absent the failure is
+   silent, not loud: `... | tee -a logs/NN.log` inside a pipeline discards the
+   log and still reports success, so the step looks like it passed with no
+   record of what happened. Use `mkdir -p logs && <cmd> 2>&1 | tee -a logs/<NN>.log`.
    Do NOT paste raw output into BUILD_STATE.md or your reply.
 4. Run the step's **Gate** (defined in that step's row in BUILD_STATE.md).
    - Gate passes → set status `DONE`.

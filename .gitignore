@@ -5,7 +5,13 @@
 models/*/*/
 __pycache__/
 *.pyc
-logs/
+# logs/* not logs/ — git cannot re-include a file inside an excluded directory,
+# so the contents are ignored and .keep is negated. This keeps the directory
+# present in a fresh clone: every build step writes logs/<NN-stepname>.log, and a
+# missing logs/ makes `tee` fail SILENTLY inside a pipeline (the log is discarded
+# and the step still looks like it passed).
+logs/*
+!logs/.keep
 .env
 .venv/
 .venv-rocm/
@@ -29,4 +35,8 @@ infra/drawio-viewer/*
 
 # harness reference JSONs — untracked
 tests/qwen3-vl_*_prompt-results.json
-backups/
+# backups/ — same reasoning as logs/: keep the directory, ignore its contents.
+# Convention: pre-upgrade snapshots land here (e.g. the OWUI sqlite DB before a
+# version bump), so the dir must exist in a fresh clone.
+backups/*
+!backups/.keep
