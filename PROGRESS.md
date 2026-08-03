@@ -116,3 +116,34 @@ NOTE: OWUI serving tuning (context handling + tool-calling) — 2026-07-14 UTC
       tokens, slowing history growth. Parked because it degrades answer grounding
       to patch a plumbing issue; the clean fix is finer docx chunking in the
       (frozen) ingester parser. Keep #2 as a fallback if context buildup returns.
+
+BLOCKED: 02-vllm-serving — 2026-08-03T12:34Z
+  need:   a decision on WHERE vLLM is installed. BUILD_STATE step 02 command 1
+          says "vLLM into the step-01 venv" (.venv/bin/pip install -U vllm).
+          Verified by dry-run on the Spark: doing that dismantles the environment
+          step 01 just gated. Recommendation: give vLLM its OWN venv (.venv-vllm)
+          and leave .venv as the pinned CUDA-13 env for embedder/ingester/MCP.
+  where:  BUILD_STATE.md step 02 command 1; scripts/deploy.sh phase_venv;
+          manifests/ragfarm-vllm.service (not yet written); .venv vs .venv-vllm
+  detail: `.venv/bin/pip install --dry-run -U 'vllm>=0.22.0'` resolves vllm 0.26.0
+          and would change, in the SAME venv the ingester and embedder run from:
+            torch            2.13.0+cu130 -> 2.11.0   (plain PyPI, NOT a cu130
+                                                       build — this alone undoes
+                                                       step 01 gate 3, sm_121)
+            numpy            1.26.4       -> 2.3.5    (major)
+            transformers     4.57.6       -> 5.14.1   (major)
+            huggingface_hub  0.36.2       -> 1.26.0   (major)
+            nvidia-cudnn-cu13 9.20.0.48   -> 9.19.0.56
+            nvidia-nccl-cu13  2.29.7      -> 2.28.9
+            protobuf         7.35.1       -> 6.33.6
+            fastapi          0.137.1      -> 0.136.3
+          numpy 1.x->2.x and transformers 4.x->5.x sit directly under the FROZEN
+          services/ingester parser and FlagEmbedding/BGE-M3 (step 03/04), so this
+          is not just a torch problem. Nothing in .venv needs to `import vllm`:
+          vLLM is reached over HTTP on :8080 and ADR-0003 keeps the retrieval
+          pipeline serving-engine agnostic, so a second venv costs only disk.
+          Also for the record: resolved stable vLLM is 0.26.0, not the v0.22.x
+          BUILD_STATE anticipates (">=0.22.0" is still satisfied, so PR #40082 is
+          in), and flashinfer-python 0.6.14 IS in the resolved set, so the b12x
+          native-FP4 target looks reachable. Step 01 remains DONE and intact — no
+          package was installed; --dry-run only.
