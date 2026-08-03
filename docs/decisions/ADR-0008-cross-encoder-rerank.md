@@ -8,6 +8,15 @@ MMR failure). The **latency** blocker that reopened this — ~36 s CPU rerank �
 Vulkan iGPU (**~36 s → ~1.9 s**, see "Measured latency" → Resolution, and the
 Architecture section). Still open, hence PENDING: `RAG_MIN_SCORE` calibration on
 accumulated dumps. Promote to ACCEPTED once that lands.
+**Amended by ADR-0013** (2026-08-03): the cross-encoder decision is untouched; on
+the Spark the reranker keeps its own llama.cpp CUDA `--reranking` server on :8081
+at full `bge-reranker-v2-m3` quality, with *lowered scheduling priority* so the
+interactive LLM wins the shared-memory-bandwidth contention.
+**Status note on the remaining PENDING item:** the `RAG_MIN_SCORE` calibration this
+ADR waits on is the *same* debt ADR-0010 §1 tracks. The gating *mechanism* shipped
+2026-07-31 (`_gate()` + Kneedle hatch in `services/rag-retrieval/server.py`); the
+*number* is still uncalibrated and the floor is still 0.0. Promote BOTH this ADR
+and ADR-0010 §1 when the labelled dump lands.
 Date: 2026-07-20 (reopened + latency resolved 2026-07-21)
 Builds on: ADR-0002 (BGE-M3 dense+sparse embedder, CPU model host on :8090),
 ADR-0003 (rag-retrieval owns corpus RAG in the MCP layer), ADR-0007 (section-aware

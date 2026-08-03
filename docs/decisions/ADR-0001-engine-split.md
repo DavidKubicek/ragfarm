@@ -1,7 +1,11 @@
 # ADR-0001: Split the APU by role (iGPU=LLM, NPU=embeddings), not within one model
 Author: David Kubicek (david.kubicek@eywo.cz)
 
-Status: Accepted (2026-06-10)
+Status: **SUPERSEDED by ADR-0013** (2026-08-03). Accepted 2026-06-10 and correct
+for its hardware; the AMD Ryzen AI 9 HX 370 target it reasons about is being
+replaced by an NVIDIA DGX Spark (GB10). The iGPU/NPU role-split, llama.cpp+Vulkan,
+and the NPU decode numbers below are **historical context only** — do not act on
+them. See `ADR-0013-spark-engine-split-vllm-nvfp4.md` for the live decision.
 Context owner: David Kubicek
 
 ## Context

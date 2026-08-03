@@ -2,6 +2,10 @@
 Author: David Kubicek (david.kubicek@eywo.cz)
 
 Status: Accepted (2026-06-15) — supersedes the original NPU/Quark decision below.
+**Amended by ADR-0013** (2026-08-03): the BGE-M3 model choice and the rejection of
+the NPU/Quark path both stand unchanged; only the *host* moves, CPU → CUDA, on the
+DGX Spark. NOTE for readers arriving from the filename: this ADR **rejects** Quark,
+it does not adopt it.
 
 ## Context
 The original plan (ADR-0001 and the first version of this ADR) put the embedding

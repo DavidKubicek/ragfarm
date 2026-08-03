@@ -1,6 +1,10 @@
 # ADR-0009 — Vision model support (Qwen3-VL family, dual-preset UI)
 Author: David Kubicek (david.kubicek@eywo.cz)
-Status: ACCEPTED (2026-07-26). Verified end-to-end against a live Qwen3-VL-8B-Thinking
+Status: ACCEPTED (2026-07-26). **Amended by ADR-0013** (2026-08-03): vision support
+stays, but on the Spark its *mechanism* changes — vLLM handles Qwen3-VL
+multimodality natively, so the llama.cpp `--mmproj` projector pairing and the
+mmproj auto-detection built around it are retired with the llama.cpp serving path.
+The preset/capability model in Open WebUI is unchanged. Verified end-to-end against a live Qwen3-VL-8B-Thinking
 GGUF on `llama-server`/Vulkan (iGPU): the openlm.ai receipt OCR example returns
 correct text at ~8.13 tok/s decode. Retrieval, tools, and mermaid remain
 identical to the text engine; only the generative model, sampler, and OWUI
