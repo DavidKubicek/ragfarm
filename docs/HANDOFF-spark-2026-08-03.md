@@ -23,6 +23,33 @@ On a fresh Spark, expect: nothing running, every step `PENDING` except 05/06
 (`BLOCKED`), and no `.venv`. That is the correct starting state — begin at
 `BUILD_STATE.md` step 01.
 
+### If the repo was rsync'd from the old box, clear these first
+
+The old box was **x86_64**; the Spark is **aarch64**. Anything compiled there is
+the wrong machine code here — this is not tidiness, it is correctness.
+
+| path | verdict | why |
+|---|---|---|
+| `.venv/` (~1.8 G) | **DELETE — mandatory** | x86_64 wheels; cannot execute on aarch64 |
+| `~/llama.cpp/build/` | **DELETE — mandatory** | same; rebuild from source for aarch64 |
+| `models/llm/*` (~16 G) | **DELETE** | all GGUF for llama.cpp. The Spark serves **NVFP4 safetensors on vLLM** — wrong format *and* wrong engine |
+| `models/embeddings/bge-m3` (~2.2 G) | delete (recommended) | arch-independent data, so it *would* work — but keeping it means step 03's fetch fragment never runs, and an unexercised fragment is an unverified one |
+| `models/reranker/*` (~1.1 G) | delete (recommended) | same reasoning; GGUF data is fine on aarch64, but exercise the fetch path |
+| `.env` | recreate from `.env.example` | gitignored, so a true fresh checkout has none. Recreating it is itself a test of whether the build documents how |
+| `logs/`, `backups/` | delete | gitignored; nothing on the Spark depends on them |
+| docker volumes `qdrant_data`, `openwebui_data` | absent on a fresh box | if present from a migration, drop them — step 04 rebuilds the collection and step 07 re-creates the OWUI presets |
+
+**Prefer `mv` over `rm` for the ~3.3 G of reusable model data** (embedder +
+reranker). Moving it aside costs nothing on the same filesystem and gives a free
+rollback if a checkpoint turns out to be gated or the network is slow:
+
+```bash
+mv models/embeddings/bge-m3 /var/tmp/bge-m3.keep     # restore if the fetch stalls
+```
+
+Delete the copies once step 03/04 have gone green. The point of clearing them is
+to make `deploy.sh` **fully exercised**, not to make the build hurt.
+
 ---
 
 ## 0. Who you are working with

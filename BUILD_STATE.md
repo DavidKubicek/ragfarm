@@ -56,11 +56,31 @@ services (05–07) and every tracing tool all run out of `.venv`.
   `scripts/proxy-env.sh` if a proxy is configured).
 
 **Why a full rebuild here.** This step deliberately **deletes** any existing
-`.venv`. A venv carried over from the AMD box holds CPU-or-ROCm torch and a stale
-dependency graph; reproducibility is the whole point of the build, and a
-half-migrated environment is exactly the thing that produces "works on my box".
+`.venv`. It is not merely hygiene: the old box was **x86_64** and the Spark is
+**aarch64** (GB10's Grace half is ARM). Every compiled wheel in a carried-over
+`.venv` is the wrong machine code and *cannot* run here. Same for any
+`~/llama.cpp/build` rsync'd across — it must be rebuilt from source for aarch64.
 The *deploy fragment* this step writes is guarded, so a later code-release run of
-`deploy.sh` will **not** rebuild it — only `--fresh` will.
+`deploy.sh` will **not** rebuild the venv — only `--fresh` will.
+
+> **ARCHITECTURE WARNING — read before judging a lock failure.**
+> `services/requirements.cu13.lock` was frozen on an **x86_64** box. Some pins may
+> have no `linux_aarch64` wheel at that exact version, in which case pip either
+> builds from source (slow but fine) or fails outright. **That is not necessarily
+> your mistake, and it is not automatically a `FAILED` step.**
+> - If pip resolves everything: proceed, and the re-freeze in command 5 captures
+>   the real aarch64 graph.
+> - If a *specific* package has no aarch64 wheel at the pinned version: record it,
+>   relax **that one pin** (nearest version with an aarch64 wheel), note the change
+>   in the step summary, and let the re-freeze commit the resolved set. Do **not**
+>   silently drop the lock and `pip install` loose — that discards reproducibility,
+>   which is the whole point of this step.
+> - If torch itself has no cu130 aarch64 wheel: **STOP, that is `BLOCKED`** — it
+>   changes the CUDA/torch pairing and is Dave's call, not yours.
+>
+> Consequence: on the *first* aarch64 build, the gate's "LOCK MATCH" check may
+> legitimately report mismatches. Judge it on the list of what mismatched, and
+> expect the committed lock to change more than a re-freeze would normally imply.
 
 **Commands:**
 ```bash
@@ -68,6 +88,7 @@ cd ~dave/ragfarm
 source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); pip needs egress
 
 # 0. record what we are building against (goes in the log, informs the lock re-freeze)
+uname -m                      # EXPECT aarch64. If x86_64 you are on the wrong box.
 nvidia-smi
 nvcc --version || ls -d /usr/local/cuda-13.0
 python3.12 --version
@@ -138,8 +159,11 @@ git diff --stat services/requirements.cu13.lock
 4. `services/requirements.cu13.lock` now pins the `nvidia-*` runtime packages
    (i.e. the re-freeze actually changed the file) and is committed.
 
-If CUDA 13 or python3.12 is missing → `BLOCKED`. If pip resolves a conflict the
-lock did not anticipate → `FAILED`; report the conflicting pair and WAIT.
+`uname -m` must be `aarch64`. If CUDA 13 or python3.12 is missing → `BLOCKED`.
+If torch has no cu130 aarch64 wheel → `BLOCKED` (Dave's call). If a non-torch pin
+lacks an aarch64 wheel → relax that single pin per the architecture warning above
+and record it; that is a `DONE` with a noted deviation, not a `FAILED`. Any other
+unresolvable conflict → `FAILED`; report the conflicting pair and WAIT.
 
 **Deploy fragment (write on DONE, per CLAUDE.md):** marker
 `deploy-step-01-venv-cuda13`. Guard on the environment being real, not merely
