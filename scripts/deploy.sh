@@ -159,15 +159,32 @@ phase_preflight() {
 # ---- 1. venv: project virtualenv + locked deps + all three models (step 01) --
 phase_venv() {
 	phase "venv (step 01 — python-env + models)"
-	if [ ! -x "$VENV/bin/python" ]; then
-		info "creating venv at $VENV ($PYVER)"
-		"$PYVER" -m venv "$VENV"
+# >>> deploy-step-01-venv-cuda13 >>>
+	# Build the project venv against the profile's lock + torch wheel index. The
+	# guard imports torch and asks it for a live CUDA device: a venv directory can
+	# exist, or exist with CPU torch, and still be useless on this box (ADR-0013).
+	if "$VENV/bin/python" -c 'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)' 2>/dev/null \
+	   && [ "${FORCE_ALL:-0}" != 1 ]; then
+		info "step 01: already satisfied, skipping"
 	else
-		info "venv exists, reusing"
+		# python3.12-dev is a REAL build dependency on aarch64, not hygiene: the
+		# Spark has no prebuilt linux_aarch64 wheel for zlib-state (an ir_datasets
+		# dep), so pip compiles it from source and dies on a missing Python.h.
+		if [ ! -f "/usr/include/${PYVER}/Python.h" ]; then
+			info "installing ${PYVER}-dev (needed to build sdist-only deps on aarch64)"
+			sudo apt-get install -y "${PYVER}-dev"
+		fi
+		if [ ! -x "$VENV/bin/python" ]; then
+			info "creating venv at $VENV ($PYVER)"
+			"$PYVER" -m venv "$VENV"
+		else
+			info "venv exists, reusing"
+		fi
+		"$VENV/bin/pip" install -q -U pip setuptools wheel
+		info "installing locked deps ($LOCK) with torch index for profile=$PROFILE"
+		"$VENV/bin/pip" install -q --extra-index-url "$TORCH_INDEX" -r "$LOCK"
 	fi
-	"$VENV/bin/pip" install -q -U pip wheel
-	info "installing locked deps ($LOCK) with torch index for profile=$PROFILE"
-	"$VENV/bin/pip" install -q --extra-index-url "$TORCH_INDEX" -r "$LOCK"
+# <<< deploy-step-01-venv-cuda13 <<<
 
 	# Model fetch/swap logic lives in ONE place (scripts/fetch-*.sh); both are
 	# idempotent (a target already on disk is a no-op) and write the resolved

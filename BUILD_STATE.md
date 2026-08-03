@@ -12,7 +12,7 @@ Reference the log file, do not parse it or reproduce it here.
 
 | NN | step                | status  | updated_utc       | log                            | summary |
 |----|---------------------|---------|-------------------|--------------------------------|---------|
-| 01 | venv-cuda13         | PENDING | 2026-08-03T00:00Z | logs/01-venv-cuda13.log        | build .venv against CUDA 13 (--profile cu13); everything downstream imports from it |
+| 01 | venv-cuda13         | DONE    | 2026-08-03T12:29Z | logs/01-venv-cuda13.log        | aarch64; torch 2.13.0+cu130 sees sm_121; llama.cpp CUDA built; +python3.12-dev; pip check false-pos (sbsa tag) |
 | 02 | vllm-serving        | PENDING | 2026-08-03T00:00Z | logs/02-vllm-serving.log        | vLLM v0.22.x serving NVFP4 Qwen3-VL MoE on :8080, --moe-backend flashinfer (b12x native FP4) |
 | 03 | embedder-service    | PENDING | 2026-08-03T00:00Z | logs/03-embedder-service.log   | BGE-M3 on CUDA behind :8090/embed, 1024-dim dense + sparse, EN+CS |
 | 04 | qdrant-ingester     | PENDING | 2026-08-03T00:00Z | logs/04-qdrant-ingester.log    | Qdrant up + corpus ingested through the FROZEN parser, dense+sparse schema |
