@@ -1,5 +1,5 @@
 # Handoff — ragfarm, to a cold agent on the DGX Spark
-**Written:** 2026-08-03 · **By:** Opus 4.7/5, on the outgoing AMD box · **For:** whoever picks this up on the Spark
+**Written:** 2026-08-03 · **By:** Claude Opus 5, on the outgoing AMD box · **For:** whoever picks this up on the Spark
 **Owner:** David Kubicek (david.kubicek@eywo.cz) — "Dave" throughout.
 
 Read this once, end to end, before touching anything. Then read `CLAUDE.md`
@@ -7,6 +7,21 @@ Read this once, end to end, before touching anything. Then read `CLAUDE.md`
 `BUILD_STATE.md` (what to execute). This document is the map; those three are the
 territory. Where they disagree with this document, **they win** — they are
 maintained, this is a snapshot.
+
+### First, see the actual state (all read-only, none of it changes anything)
+
+```bash
+cat /tmp/ragfarm.lock            # IDLE / missing = safe. A timestamp <300s old = STOP.
+git -C ~dave/ragfarm log --oneline -15
+./ragfarm_env.py                 # every endpoint + path as the code really resolves it
+scripts/stack.sh health          # what is actually up (expect all DOWN on a fresh box)
+grep -A12 '^| NN' BUILD_STATE.md # the step table: what is PENDING/BLOCKED/DONE
+cat PROGRESS.md                  # any BLOCKED:/UNBLOCKED: entries from Dave
+```
+
+On a fresh Spark, expect: nothing running, every step `PENDING` except 05/06
+(`BLOCKED`), and no `.venv`. That is the correct starting state — begin at
+`BUILD_STATE.md` step 01.
 
 ---
 
@@ -196,7 +211,7 @@ Read the status line, not the filename. Several are misleading.
 | 0007 chunking | ACCEPTED | section-aware, broad-in/narrow-out. Its §2 MMR is superseded. |
 | 0008 cross-encoder | **PENDING** | The *quality* decision is validated and live. Still PENDING purely because `RAG_MIN_SCORE` is uncalibrated. |
 | **0009 vision** | **ACCEPTED — last fully implemented ADR** | Amended by 0013: mechanism moves from llama.cpp `--mmproj` to vLLM-native. |
-| 0010 dual-branch | ACCEPTED (architecture) | **§1 gate code shipped 2026-07-31, unverified by Dave. Floor uncalibrated. §2 LightRAG NOT BUILT.** |
+| 0010 dual-branch | **IN PROGRESS** | Architecture accepted 2026-07-30 and not reopened. **§1 gate code shipped 2026-07-31, unverified by Dave, floor still 0.0. §2 LightRAG NOT BUILT.** |
 | 0011 workbooks | PROPOSED | nothing built. |
 | 0012 multimodal | PROPOSED | nothing built. |
 | **0013 Spark** | **ACCEPTED** | The live engine split. Start here. |
@@ -234,7 +249,9 @@ This directly attacks the recurring **context-blowup** problem and it is unblock
   alias. Watch for the printed NOTE when two aliases share a `preset_id`.
 - **`.env` is now genuinely the single source of truth, end to end.**
   `ragfarm_env.py` at the **repo root** is the canonical resolver (the tracing copy
-  is a thin shim). Run `python ragfarm_env.py` to print everything as resolved.
+  is a thin shim). Run **`./ragfarm_env.py`** to print every endpoint and path as
+  the code really resolves it — it re-execs into `.venv` itself, so it works from
+  any shell. This is the fastest answer to "what is actually configured?".
   - Canonicalised the names. `LLM_URL`/`LLAMA_URL`, `EMBED_URL`/`EMBED_ENDPOINT`
     and `RERANK_URL`/`RERANK_ENDPOINT` were competing spellings of the same thing;
     base URLs are now the source and full endpoints are derived. Legacy names still
@@ -388,6 +405,8 @@ assuming either way**.
 CLAUDE.md                     the contract — read every session
 BUILD_STATE.md                linear build progress + step definitions + gates
 PROGRESS.md                   the BLOCKED:/UNBLOCKED: channel to Dave
+ragfarm_env.py                CANONICAL env resolver. Run it (./ragfarm_env.py) to
+                              see resolved config; import it instead of os.environ
 scripts/deploy.sh             the accreting reproducible deploy (fragment per step)
 scripts/stack.sh              start/stop/restart/health the whole system
 scripts/rag_pool_inspect.py   candidate-pool inspection + --dump-scored calibration
