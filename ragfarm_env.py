@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """ragfarm_env — the canonical resolver for every ragfarm endpoint and path.
 
-RUN IT to see the whole environment as the code actually resolves it:
-    ./ragfarm_env.py
-
-IMPORT IT so config comes from one place instead of hand-typed variable names:
-    from ragfarm_env import LLM_URL, EMBED_ENDPOINT
-
-
 `.env` AT THE REPO ROOT IS THE SINGLE SOURCE OF TRUTH. This module is how Python
-code gets at it. Import it instead of calling `os.environ.get` with a hand-typed
-variable name, and the naming stays consistent by construction.
+code gets at it, and it has exactly two uses:
 
-    from ragfarm_env import LLM_URL, EMBED_ENDPOINT, RERANK_ENDPOINT
+  1. RUN IT — the "what is actually configured right now?" command. Prints every
+     endpoint and path as the code will really resolve it, plus warnings:
+
+         ./ragfarm_env.py
+
+  2. IMPORT IT — so config comes from one canonical name per concept instead of
+     a hand-typed `os.environ.get` in each file:
+
+         from ragfarm_env import LLM_URL, EMBED_ENDPOINT, RERANK_ENDPOINT
 
 WHY IT EXISTS. The same concept was being read under different names in different
 files, which quietly defeats the whole point of a single source of truth:
