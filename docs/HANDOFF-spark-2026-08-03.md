@@ -89,6 +89,31 @@ to production.
 services, with an OpenAI-compatible LLM endpoint underneath and Qdrant + a
 hybrid retrieval pipeline behind the `search_corpus` tool.
 
+### THE MODEL — `Qwen3-VL-30B-A3B` is the brain. This is settled.
+
+Dave's decision, not a suggestion to be re-derived. **All tuning happens on this
+model**; it is the vision engine *and* the general engine. There is no separate
+text model on the Spark — Qwen2.5-7B is retired (kept only as a fallback-deck
+reference in `docs/prompts.md`).
+
+| what | value |
+|---|---|
+| checkpoint (target) | `ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4` — community NVFP4 + vision |
+| fallback | `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` — official Qwen, fewer unknowns, bigger |
+| served alias | **`qwen3-vl-30b-a3b`** (`vllm serve --served-model-name`) |
+| OWUI preset | `ragfarm-vision`, already keyed to that alias in `MODEL_TUNING` |
+| sampler | temp 0.6, top_p 0.95, top_k 20, max_tokens 16384 |
+
+**The served alias is load-bearing.** `infra/openwebui/setup_openwebui.py` keys
+`MODEL_TUNING` by the alias the server advertises on `/v1/models`. Serve it under
+any other name and the preset silently fails to bind — the script prints a `NOTE`
+about an unknown alias and falls back. Verified working: `resolve_preset(
+"qwen3-vl-30b-a3b")` → preset `ragfarm-vision`, vision on, `file_context` off.
+
+Why a 30B **MoE** and not something dense: only ~3B parameters are active per
+token, so decode streams ~1.5 GB/token instead of ~15 GB — on a bandwidth-bound
+box that gap, not FP4, is the whole reason this model is viable (§3, ADR-0013).
+
 ---
 
 ## 2. The single most important thing to know
@@ -338,7 +363,28 @@ This directly attacks the recurring **context-blowup** problem and it is unblock
   `activate-llm.sh`, `llama-launch.sh`, `lib-models.sh` and
   `manifests/ragfarm-llama.service` all assume GGUF + `--mmproj`. They need a
   safetensors/vLLM equivalent (`ragfarm-vllm.service`). **This is real work and it
-  is on the critical path for step 02.**
+  is on the critical path for step 02.** Target alias: **`qwen3-vl-30b-a3b`** —
+  it must match the `MODEL_TUNING` key or the OWUI preset will not bind.
+  Three things to fix *while you are in there*, all carried over deliberately:
+  1. **`LLAMA_DIR` is respected by scripts but hardcoded in units.**
+     `scripts/deploy.sh` and `fetch-encoder.sh` honour `LLAMA_DIR`
+     (default `$HOME/llama.cpp`), but `manifests/ragfarm-reranker.service` and
+     `scripts/llama-launch.sh` hardcode `/home/dave/llama.cpp`. Overriding
+     `LLAMA_DIR` therefore half-works — scripts follow it, units do not. Make the
+     units read it too, or drop the variable and be honestly hardcoded. Do not
+     leave it half-and-half.
+  2. **Rename `ragfarm-llama.service` → `ragfarm-vllm.service`** and update the
+     `HOST_UNITS` arrays in **both** `scripts/deploy.sh` and `scripts/stack.sh`
+     together. They carry inline notes saying so. Renaming one alone breaks the
+     stack. NOTE llama.cpp itself stays — the reranker uses it.
+  3. **`RERANK_GGUF_PATH` → `RERANK_MODEL_PATH`** must move in `fetch-encoder.sh`
+     **and** `manifests/ragfarm-reranker.service` at the same time; they are
+     currently consistent on the legacy name, so a one-sided rename gives the
+     reranker an empty `-m` and it dies at startup.
+- **`infra/llama/README.md` needs a title fix.** It is marked HISTORICAL at the
+  top, but the H1 still reads "iGPU llama.cpp + Vulkan on Radeon 890M — TWO
+  servers", which is misleading in a file listing or a search result. It should say
+  it is the AMD-era doc and that llama.cpp now serves the reranker only.
 
 ### 7.3 Numbers that are inferred, not measured
 Everything performance-related in ADR-0013 is tagged **MEASURE**. Specifically:
