@@ -35,7 +35,7 @@ the wrong machine code here — this is not tidiness, it is correctness.
 | `models/llm/*` (~16 G) | **DELETE** | all GGUF for llama.cpp. The Spark serves **NVFP4 safetensors on vLLM** — wrong format *and* wrong engine |
 | `models/embeddings/bge-m3` (~2.2 G) | delete (recommended) | arch-independent data, so it *would* work — but keeping it means step 03's fetch fragment never runs, and an unexercised fragment is an unverified one |
 | `models/reranker/*` (~1.1 G) | delete (recommended) | same reasoning; GGUF data is fine on aarch64, but exercise the fetch path |
-| `.env` | recreate from `.env.example` | gitignored, so a true fresh checkout has none. Recreating it is itself a test of whether the build documents how |
+| `.env` | **delete** — step 01 recreates it | gitignored, so a fresh checkout has none. Step 01 now bootstraps it from `.env.example` and `fetch-encoder.sh` fills in the model paths. The old box's `.env` is NOT worth keeping: it accumulated duplicate keys, trailing whitespace, and GGUF paths that are the wrong format for vLLM |
 | `logs/`, `backups/` | delete | gitignored; nothing on the Spark depends on them |
 | docker volumes `qdrant_data`, `openwebui_data` | absent on a fresh box | if present from a migration, drop them — step 04 rebuilds the collection and step 07 re-creates the OWUI presets |
 
@@ -158,6 +158,11 @@ ConnectX-7 — see `docs/hardware/NVIDIA-Spark.md`.
 **systemd units** (`manifests/`): `ragfarm-llama.service` (→ needs replacing with
 `ragfarm-vllm.service`), `ragfarm-reranker.service`, `ragfarm-embedder.service`,
 `ragfarm-ingester-watcher.service`, `ragfarm-stack.service` (the compose stack).
+
+**Host prerequisite:** `dave` must be in the `docker` group — `ragfarm-stack.service`
+runs `docker compose` as `User=dave`. This is Dave's to set up (group membership is
+root-equivalent); if `docker info` fails, that is `BLOCKED`, not something to work
+around with `sudo docker`.
 
 **Operational entry points:** `scripts/stack.sh {start|stop|restart|status|health}`
 brings the whole system up in dependency order and probes every endpoint.

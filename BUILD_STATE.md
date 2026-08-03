@@ -47,13 +47,44 @@ services (05–07) and every tracing tool all run out of `.venv`.
 > of this topology (ADR-0013 supersedes ADR-0001). `infra/npu/` and
 > `docs/ryzenai/` are historical.
 
-**Preconditions (host, Dave-supplied):**
+**Preconditions (host, Dave-supplied). All four are `BLOCKED`, not `FAILED`:**
 - `cuda-libraries-13-0` installed — verify with `nvcc --version` or
-  `ls /usr/local/cuda-13.0`. Absent → `BLOCKED`, not `FAILED`.
+  `ls /usr/local/cuda-13.0`.
 - `python3.12` available (the locks are frozen against 3.12; a different minor
   will resolve different wheels and silently diverge from the lock).
 - Network egress to `pypi.org` and `download.pytorch.org` (via
   `scripts/proxy-env.sh` if a proxy is configured).
+- **`dave` is in the `docker` group.** `manifests/ragfarm-stack.service` runs
+  `docker compose` as `User=dave`, so without it the whole container plane fails
+  at step 04/07 with a permission error. Verify: `id -nG dave | grep -q docker`,
+  or functionally `docker info >/dev/null`. This is a **privilege decision only
+  Dave makes** — docker group membership is effectively root-equivalent, so do
+  not add yourself to it and do not paper over it with `sudo docker`.
+
+**`.env` bootstrap — do this FIRST, before anything else in this step.**
+A clean checkout has **no `.env`** (it is gitignored). Nothing breaks loudly
+without it — every URL has a real default in `ragfarm_env.py` — but two things go
+wrong quietly, so create it up front rather than discovering this at step 03:
+- The units no longer carry `Environment=` fallbacks (stripped 2026-08-03, config
+  belongs in `.env`), so `ragfarm-embedder` and `ragfarm-reranker` have **no model
+  path at all** until `scripts/fetch-encoder.sh` writes one.
+- `CORPUS_PATH` is the one genuinely site-specific value and **no step sets it**.
+
+```bash
+cd ~dave/ragfarm
+[ -f .env ] || cp .env.example .env      # every line is commented; defaults apply
+grep -q '^CORPUS_PATH=' .env || echo 'CORPUS_PATH=/data/corpus' >> .env
+./ragfarm_env.py                          # confirm what actually resolved
+```
+Confirm `corpus` points where Dave actually put it — **ask him if unsure**, do not
+guess. `scripts/fetch-encoder.sh` (step 03) appends `EMBED_MODEL_PATH` and
+`RERANK_GGUF_PATH` itself via `env_upsert`, which creates the file if absent, so
+the model paths are self-healing from there.
+
+> Naming note for the scripts rework: `fetch-encoder.sh` writes the **legacy**
+> `RERANK_GGUF_PATH`, and `ragfarm-reranker.service` reads that same legacy name —
+> internally consistent, so **do not rename one without the other**. Both should
+> move to `RERANK_MODEL_PATH` together as part of the vLLM lifecycle rework.
 
 **Why a full rebuild here.** This step deliberately **deletes** any existing
 `.venv`. It is not merely hygiene: the old box was **x86_64** and the Spark is
