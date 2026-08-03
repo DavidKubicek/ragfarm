@@ -321,15 +321,25 @@ phase_openwebui() {
 # (or when --recreate-corpus is given). Ongoing sync is the watcher's job.
 phase_corpus() {
 	phase "corpus bootstrap (ADR-0006)"
+# >>> deploy-step-04-qdrant-ingester >>>
+	# Qdrant + first ingest through the FROZEN parser. The ingester runs on the
+	# HOST (not in a container) and calls the step-03 embedder on :8090, so both
+	# must be up before this point.
+	$COMPOSE up -d qdrant
+	wait_http "$QDRANT_URL/collections" 60 || die "qdrant not answering ($QDRANT_URL)"
 	local exists; exists=$(curl -s "$QDRANT_URL/aliases" | grep -c "\"$ALIAS\"" || true)
 	local phys;   phys=$(curl -s "$QDRANT_URL/collections/$ALIAS" | grep -c '"status"' || true)
 
-	if [ "$RECREATE_CORPUS" = "1" ] || { [ "$exists" = "0" ] && [ "$phys" = "0" ]; }; then
+	# --recreate ONLY on a genuine bootstrap, on an explicit --recreate-corpus, or
+	# under --fresh. It rebuilds every vector, so it must never fire just because a
+	# deploy ran: ADR-0006's manifest handles added/edited/removed files incrementally.
+	if [ "$RECREATE_CORPUS" = "1" ] || [ "${FORCE_ALL:-0}" = 1 ] || { [ "$exists" = "0" ] && [ "$phys" = "0" ]; }; then
 		info "running --recreate (bootstrap/migrate: builds corpus_<ts>, switches alias, seeds manifest)"
 		"$VENV/bin/python" services/ingester/ingester.py --recreate --corpus "$CORPUS_PATH"
 	else
-		info "collection/alias '$ALIAS' already present — skipping recreate (watcher keeps it synced)"
+		info "step 04: collection/alias '$ALIAS' already present — skipping recreate (watcher keeps it synced)"
 	fi
+# <<< deploy-step-04-qdrant-ingester <<<
 
 	# GATE — point count > 0 AND stored sparse is populated (config alone can't tell you)
 	# Process substitution (not `python - <<EOF`) so the scroll JSON stays on stdin
