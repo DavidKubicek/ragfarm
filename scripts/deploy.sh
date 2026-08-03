@@ -221,6 +221,23 @@ PY
 # ---- 2. host services: llama + reranker + embedder on systemd (steps 02/03/08) --
 phase_host_services() {
 	phase "host services (llama + reranker + embedder)"
+# >>> deploy-step-03-embedder-service >>>
+	# BGE-M3 on CUDA behind :8090/embed (ADR-0013 §4). Self-contained on purpose:
+	# it fetches the encoder pair and installs only its own unit, so it does not
+	# depend on the HOST_UNITS loop below still naming the retired llama unit.
+	if curl -sf --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 \
+	   && [ "${FORCE_ALL:-0}" != 1 ]; then
+		info "step 03: already satisfied, skipping"
+	else
+		# fetch-encoder.sh is idempotent (present target = no-op) and writes
+		# EMBED_MODEL_PATH / RERANK_GGUF_PATH into .env, which the unit reads.
+		# --no-restart: the unit may not be installed yet on a bare-metal run.
+		VENV_PY="$VENV/bin/python" scripts/fetch-encoder.sh --no-restart
+		install_unit ragfarm-embedder.service
+		sudo systemctl daemon-reload
+		sudo systemctl enable --now ragfarm-embedder.service
+	fi
+# <<< deploy-step-03-embedder-service <<<
 	# models were fetched in phase_venv; this phase only installs+starts the units.
 	local u
 	for u in "${HOST_UNITS[@]}"; do install_unit "$u"; done

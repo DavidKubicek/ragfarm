@@ -14,7 +14,7 @@ Reference the log file, do not parse it or reproduce it here.
 |----|---------------------|---------|-------------------|--------------------------------|---------|
 | 01 | venv-cuda13         | DONE    | 2026-08-03T12:29Z | logs/01-venv-cuda13.log        | aarch64; torch 2.13.0+cu130 sees sm_121; llama.cpp CUDA built; +python3.12-dev; pip check false-pos (sbsa tag) |
 | 02 | vllm-serving        | BLOCKED | 2026-08-03T12:34Z | logs/02-vllm-serving.log        | vllm 0.26.0 into .venv would downgrade torch off cu130 + bump numpy/transformers under frozen ingester — venv split is Dave's call |
-| 03 | embedder-service    | PENDING | 2026-08-03T00:00Z | logs/03-embedder-service.log   | BGE-M3 on CUDA behind :8090/embed, 1024-dim dense + sparse, EN+CS |
+| 03 | embedder-service    | DONE    | 2026-08-03T12:47Z | logs/03-embedder-service.log   | BGE-M3 rev 5617a9f6 on cuda:0 fp16, :8090/embed; 1024-dim L2≈1.0 + sparse on EN+CS; server.py CPU→CUDA |
 | 04 | qdrant-ingester     | PENDING | 2026-08-03T00:00Z | logs/04-qdrant-ingester.log    | Qdrant up + corpus ingested through the FROZEN parser, dense+sparse schema |
 | 05 | mcp-placement       | BLOCKED | 2026-06-18T11:30Z | logs/05-mcp-placement.log      | no OpenNebula access in PoC; ON creds+reachability deferred to deployment (ADR-0003) |
 | 06 | mcp-fs-host-control | BLOCKED | 2026-06-18T11:30Z | logs/06-mcp-fs-host-control.log| host-control needs live ON (drain-reboot); deferred to deployment (ADR-0003) |
