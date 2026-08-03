@@ -1,0 +1,104 @@
+# /etc/systemd/system/ragfarm-vllm.service  (runs on HOST, needs the GB10 GPU)
+# Generative LLM: Qwen3-VL-30B-A3B (NVFP4 safetensors) served by vLLM on the
+# OpenAI-compatible endpoint 127.0.0.1:8080/v1 (ADR-0013). Replaces the retired
+# ragfarm-llama.service, which served a GGUF via llama.cpp on the AMD box.
+#
+# llama.cpp itself is NOT retired — ragfarm-reranker.service still runs the
+# cross-encoder on it (ADR-0013 §3). Only GENERATION moved to vLLM.
+#
+# vLLM lives in a DEDICATED venv (.venv-vllm), not the project .venv: it pins
+# torch 2.11.0 and numpy/transformers majors that would break the CUDA-13 build
+# and the frozen ingester. Nothing imports vllm — this endpoint is the contract.
+[Unit]
+Description=ragfarm vLLM (Qwen3-VL-30B-A3B NVFP4, CUDA/sm_121)
+After=network-online.target
+# Give up instead of crash-looping. A 30B model takes minutes to load, so a broken
+# config looks exactly like a slow start: without a limit this unit restarted 99
+# times over several hours, re-reading 17.9 GiB of shards each cycle, while
+# `systemctl is-active` kept saying activating/active. 3 attempts in 30 min then
+# `failed` makes a real breakage visible to stack.sh health and to a human.
+StartLimitBurst=3
+StartLimitIntervalSec=1800
+
+[Service]
+Type=simple
+User=dave
+# CONFIG LIVES IN .env, NOT HERE — this unit carries start/stop/restart POLICY only.
+# Required keys: LLM_MODEL_PATH, LLM_SERVED_NAME, LLM_MOE_BACKEND, LLM_MAX_MODEL_LEN.
+# LLM_SERVED_NAME is load-bearing: infra/openwebui/setup_openwebui.py keys
+# MODEL_TUNING by the alias advertised on /v1/models, so serving under a different
+# name makes the ragfarm-vision preset silently fail to bind.
+EnvironmentFile=-/home/dave/ragfarm/.env
+# PATH is PLUMBING, not config — without it the service cannot start at all.
+# FlashInfer JIT-compiles kernels (e.g. the sampling module) on first use and
+# shells out to `ninja` + `nvcc`. `ninja` is installed INSIDE .venv-vllm and nvcc
+# lives in the CUDA toolkit; systemd's default PATH has neither, and invoking the
+# venv's binary by absolute path does NOT put its siblings on PATH the way
+# `activate` does. Without this the engine dies with
+#   FileNotFoundError: [Errno 2] No such file or directory: 'ninja'
+# AFTER loading all four shards, so it looks like a slow model load, not a
+# missing build tool.
+Environment=PATH=/home/dave/ragfarm/.venv-vllm/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin
+Environment=CUDA_HOME=/usr/local/cuda
+# NOTE: MAX_JOBS lives in .env (loaded by the EnvironmentFile above), not here —
+# it is a tunable number, so it is config. It is LOAD-BEARING on this box:
+# flashinfer/jit/cpp_ext.py only passes `-j` to ninja when MAX_JOBS is set; unset,
+# ninja defaults to nproc+2 = 22 parallel CUDA compiles. CUTLASS translation units
+# take several GB each, so that is ~88 GB of compilers plus 18 GB of weights — the
+# service was OOM-killed three times at a near-identical 98.3-98.6 GB peak, and it
+# moved not at all when --gpu-memory-utilization, --max-num-batched-tokens and
+# --max-num-seqs were lowered, because the memory was never vLLM's to begin with.
+# Only bites on a cold JIT cache; warm starts skip compilation entirely.
+#
+# PATH deliberately does NOT move to .env: .env is also read by the embedder and
+# reranker units and injected into every container via compose `env_file`, so a
+# PATH line there would clobber PATH process-wide across the whole stack.
+WorkingDirectory=/home/dave/ragfarm
+ExecStart=/home/dave/ragfarm/.venv-vllm/bin/vllm serve ${LLM_MODEL_PATH} \
+  --served-model-name ${LLM_SERVED_NAME} \
+  --host 127.0.0.1 --port 8080 \
+  --moe-backend ${LLM_MOE_BACKEND} \
+  --enable-auto-tool-choice --tool-call-parser hermes \
+  --max-model-len ${LLM_MAX_MODEL_LEN} \
+  --gpu-memory-utilization ${LLM_GPU_MEM_UTIL} \
+  --max-num-batched-tokens ${LLM_MAX_NUM_BATCHED_TOKENS} \
+  --max-num-seqs ${LLM_MAX_NUM_SEQS}
+# The batch caps are what actually keep startup alive, and they are NOT the same
+# lever as --gpu-memory-utilization. vLLM's profile_run does a dummy forward pass
+# sized by max-num-batched-tokens BEFORE the KV budget applies, and on a 30B MoE
+# that materialises per-expert workspaces. At vLLM's defaults that run peaked at
+# 98.6 GB with 13.6 GB swap and was OOM-killed even with utilization pinned at
+# 0.50 — the knob had no effect on the peak because the peak is not KV cache.
+# 8192 tokens / 64 seqs is ample for a small-team RAG box.
+# --gpu-memory-utilization is NOT optional on GB10. Unified memory means there is
+# no separate VRAM pool: vLLM's 0.9 default reserves ~0.9 x 120 GB and then
+# competes with the host side, the resident BGE-M3 embedder, the llama.cpp
+# reranker, Qdrant and the OS — all of which live in the SAME 128 GB. Left at the
+# default this unit peaked at 98.4 GB with 13.7 GB of swap and was killed by the
+# OOM killer AFTER a full 17.9 GiB load, i.e. it looked like a slow start.
+# 0.50 ~= 60 GB: 17.9 GiB of weights plus ample KV cache at 32k context, leaving
+# the other GPU consumers room. Raise it only with the others' budgets in hand.
+# --moe-backend is an .env knob on purpose. GB10 is sm_121: `flashinfer_b12x` is
+# the native tensor-core FP4 path and the target; `marlin` is the FALLBACK, which
+# dequantizes FP4->BF16 and forfeits the speedup. A wrong choice here does not
+# necessarily crash — a mismatched FP4 MoE emits streams of `!!!!!` — so being able
+# to flip it without editing a unit file is the point.
+#
+# NOTE the exact spelling. ADR-0013 says "--moe-backend flashinfer (the b12x path)";
+# in vLLM 0.26.0 the accepted value is literally `flashinfer_b12x`. Plain
+# `flashinfer` is NOT a valid choice and argparse rejects it at startup (which at
+# least fails loudly). Other flashinfer_* variants exist (cutedsl, cutlass, trtllm)
+# and are NOT the same path.
+#
+# Model load is slow (30B, 4 shards); give it room before systemd calls it dead.
+TimeoutStartSec=600
+# Shutdown is slow too (engine core + worker procs); the default 90s SIGTERM window
+# expired repeatedly and systemd fell back to SIGKILL on every stop.
+TimeoutStopSec=180
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/dave/ragfarm/logs/02-vllm-serving.log
+StandardError=append:/home/dave/ragfarm/logs/02-vllm-serving.log
+
+[Install]
+WantedBy=multi-user.target

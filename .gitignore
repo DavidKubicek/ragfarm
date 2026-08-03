@@ -15,6 +15,10 @@ logs/*
 .env
 .venv/
 .venv-rocm/
+# vLLM gets its OWN venv (ADR-0013 / step 02): installing it into .venv would
+# downgrade torch off the cu130 build and bump numpy/transformers under the
+# frozen ingester. Nothing imports vllm — it is reached over HTTP on :8080.
+.venv-vllm/
 .claude/
 services/ingester/manifest.db*
 services/ingester/known-good.constraints.txt

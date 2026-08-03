@@ -62,11 +62,12 @@ COMPOSE="docker compose -f infra/compose.yaml"
 MANIFESTS="manifests"
 SYSTEMD_DIR="/etc/systemd/system"
 # host-plane units (systemd) and the stack/watcher units, in the order they matter
-# NOTE (ADR-0013): ragfarm-llama.service is the retired llama.cpp GENERATION unit.
-# Step 02 replaces it with ragfarm-vllm.service — rename it in BOTH this list and
-# scripts/stack.sh when that unit is created, or the stack tries to start a unit
-# with no model path. llama.cpp itself stays, for the reranker only.
-HOST_UNITS=(ragfarm-llama.service ragfarm-reranker.service ragfarm-embedder.service)
+# ADR-0013: generation moved llama.cpp -> vLLM in step 02, so ragfarm-llama.service
+# is retired and ragfarm-vllm.service takes its place. This list and the HOST_UNITS
+# in scripts/stack.sh must stay in step — renaming one alone starts a unit that does
+# not exist, or leaves the retired one running. llama.cpp itself STAYS: the
+# cross-encoder reranker still runs on it (ADR-0013 §3).
+HOST_UNITS=(ragfarm-vllm.service ragfarm-reranker.service ragfarm-embedder.service)
 STACK_UNIT="ragfarm-stack.service"
 WATCH_UNIT="ragfarm-ingester-watcher.service"
 
@@ -191,13 +192,14 @@ phase_venv() {
 	# paths into .env, which the systemd units read (see manifests/ragfarm-*.service).
 	info "ensuring embedder + reranker pair present (scripts/fetch-encoder.sh)"
 	VENV_PY="$VENV/bin/python" scripts/fetch-encoder.sh
-	info "ensuring LLM GGUF present (scripts/fetch-llm.sh)"
-	VENV_PY="$VENV/bin/python" scripts/fetch-llm.sh
+	# The LLM is NOT fetched here any more. ADR-0013 moved generation to vLLM, so the
+	# checkpoint is NVFP4 safetensors fetched by the step-02 fragment into .venv-vllm's
+	# world — not a GGUF. scripts/fetch-llm.sh is the old llama.cpp-era tool and is
+	# left in place unused; calling it here would download the wrong format and then
+	# fail the GGUF assertions below.
 
 	EMBED_MODEL_PATH="$(read_env_var EMBED_MODEL_PATH)"
 	RERANK_GGUF_PATH="$(read_env_var RERANK_GGUF_PATH)"
-	LLM_GGUF_PATH="$(read_env_var LLM_GGUF_PATH)"
-	LLM_GGUF_MMPROJ="$(read_env_var LLM_GGUF_MMPROJ)"
 
 	# GATE
 	"$VENV/bin/python" - <<'PY' || die "venv import check failed"
@@ -211,16 +213,50 @@ PY
 		|| ls "$EMBED_MODEL_PATH"/pytorch_model*.bin >/dev/null 2>&1 \
 		|| die "no weight file (safetensors/bin) at EMBED_MODEL_PATH ($EMBED_MODEL_PATH)"
 	[ -n "$RERANK_GGUF_PATH" ] && [ -f "$RERANK_GGUF_PATH" ] || die "RERANK_GGUF_PATH missing or unset ($RERANK_GGUF_PATH)"
-	[ -n "$LLM_GGUF_PATH" ] && [ -f "$LLM_GGUF_PATH" ] || die "LLM_GGUF_PATH missing or unset ($LLM_GGUF_PATH)"
-	# LLM_GGUF_MMPROJ is optional (blank = text-only model) but if SET must exist —
-	# a stale/missing path here breaks llama-server startup in phase_host_services.
-	[ -z "$LLM_GGUF_MMPROJ" ] || [ -f "$LLM_GGUF_MMPROJ" ] || die "LLM_GGUF_MMPROJ set but file missing ($LLM_GGUF_MMPROJ)"
-	ok "venv ready; deps import; embedder+reranker+LLM present"
+	# The LLM checkpoint is asserted by the step-02 fragment, not here: it is a
+	# safetensors snapshot DIRECTORY under vLLM, not a single GGUF file.
+	ok "venv ready; deps import; embedder+reranker present"
 }
 
 # ---- 2. host services: llama + reranker + embedder on systemd (steps 02/03/08) --
 phase_host_services() {
-	phase "host services (llama + reranker + embedder)"
+	phase "host services (vllm + reranker + embedder)"
+# >>> deploy-step-02-vllm-serving >>>
+	# Generative LLM: Qwen3-VL-30B-A3B NVFP4 on vLLM at :8080 (ADR-0013).
+	# vLLM gets its OWN venv. Installed into the project .venv it downgrades torch
+	# off the cu130 build and pulls numpy 2.x / transformers 5.x in under the FROZEN
+	# ingester and FlagEmbedding. Nothing imports vllm — :8080 is the contract.
+	if curl -sf --max-time 5 http://127.0.0.1:8080/v1/models >/dev/null 2>&1 \
+	   && [ "${FORCE_ALL:-0}" != 1 ]; then
+		info "step 02: already satisfied, skipping"
+	else
+		local VLLM_VENV="$REPO_ROOT/.venv-vllm"
+		if ! "$VLLM_VENV/bin/python" -c 'import vllm' 2>/dev/null; then
+			info "creating $VLLM_VENV and installing vLLM"
+			"$PYVER" -m venv "$VLLM_VENV"
+			"$VLLM_VENV/bin/pip" install -q --upgrade pip setuptools wheel
+			"$VLLM_VENV/bin/pip" install -q -U 'vllm>=0.22.0'
+		fi
+		# NVFP4 safetensors snapshot (~17.9 GiB). Fetched with the PROJECT venv's
+		# huggingface_hub; idempotent — an already-complete snapshot re-verifies fast.
+		info "ensuring NVFP4 checkpoint present"
+		"$VENV/bin/python" - <<'PY'
+from huggingface_hub import snapshot_download
+p = snapshot_download(
+    "ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4",
+    local_dir="models/llm/Qwen3-VL-30B-A3B-Instruct-NVFP4",
+)
+print("  snapshot:", p)
+PY
+		install_unit ragfarm-vllm.service
+		sudo systemctl daemon-reload
+		sudo systemctl enable --now ragfarm-vllm.service
+		# Cold start is SLOW and that is expected, not a hang: FlashInfer JIT-compiles
+		# its kernels on first run (measured 813 s end-to-end, of which torch.compile
+		# was only 9.5 s). Warm starts reuse ~/.cache/flashinfer + ~/.cache/vllm.
+		wait_http "$LLM_URL/v1/models" 1200 || die "vLLM endpoint not answering ($LLM_URL) — check MAX_JOBS/.env and logs/02-vllm-serving.log"
+	fi
+# <<< deploy-step-02-vllm-serving <<<
 # >>> deploy-step-03-embedder-service >>>
 	# BGE-M3 on CUDA behind :8090/embed (ADR-0013 §4). Self-contained on purpose:
 	# it fetches the encoder pair and installs only its own unit, so it does not

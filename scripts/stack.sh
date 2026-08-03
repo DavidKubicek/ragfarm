@@ -16,9 +16,10 @@ set -uo pipefail
 
 # Host units in START order (stop reverses this). The container stack is a separate
 # unit (ragfarm-stack) that docker-compose-ups the containers + heals mcpo.
-# NOTE (ADR-0013): ragfarm-llama is the retired llama.cpp GENERATION unit; step 02
-# replaces it with ragfarm-vllm. Rename here AND in scripts/deploy.sh together.
-HOST_UNITS=(ragfarm-llama ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher)
+# ADR-0013: generation moved llama.cpp -> vLLM in step 02, so ragfarm-vllm replaces
+# the retired ragfarm-llama here and in scripts/deploy.sh — the two lists must stay
+# in step. llama.cpp itself STAYS: ragfarm-reranker still runs on it (ADR-0013 §3).
+HOST_UNITS=(ragfarm-vllm ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher)
 STACK_UNIT=ragfarm-stack
 COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/compose.yaml"
 

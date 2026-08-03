@@ -117,6 +117,12 @@ NOTE: OWUI serving tuning (context handling + tool-calling) — 2026-07-14 UTC
       to patch a plumbing issue; the clean fix is finer docx chunking in the
       (frozen) ingester parser. Keep #2 as a fallback if context buildup returns.
 
+UNBLOCKED: 02-vllm-serving — 2026-08-03T13:05Z
+  supplied: Dave's decision, given in-session: "Absolutely, give vLLM its own
+            .venv-vllm." Step 02 installs vLLM into a DEDICATED venv at
+            .venv-vllm; .venv stays the pinned CUDA-13 environment for the
+            embedder, the frozen ingester and the MCP services.
+  (original blocker below, kept as the historical record)
 BLOCKED: 02-vllm-serving — 2026-08-03T12:34Z
   need:   a decision on WHERE vLLM is installed. BUILD_STATE step 02 command 1
           says "vLLM into the step-01 venv" (.venv/bin/pip install -U vllm).
