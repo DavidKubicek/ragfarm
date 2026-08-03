@@ -211,31 +211,47 @@ them. Closing this promotes **both** ADR-0008 and ADR-0010 §1.
 
 This directly attacks the recurring **context-blowup** problem and it is unblocked.
 
-### 7.2 Work committed but not yet done (Dave's list, 2026-08-03)
-These were agreed in the outgoing session and are **not** finished:
-- **`setup_openwebui.py` → alias-keyed config.** A single nested structure at the
-  top of the file, keyed by model **alias**, each holding system prompt,
-  temperature, top_p, top_k, max_tokens, capabilities, toolIds, description. The
-  script keys off the currently-active model. **Idempotency must be preserved.**
-  Motivation: per-model settings, all editable in one place.
-- **`.env` as single source of truth via `python-dotenv`.** `load_dotenv()` in
-  `tests/tracing/*.py` and the services; replace hardcoded ports with
-  `os.environ.get(name, default)`. `python-dotenv==1.2.2` is already added to all
-  three locks. **Open sub-question:** does this work for containerized services?
-  The root `.env` is not currently injected into containers (compose reads it for
-  `${VAR}` substitution only). Either bind-mount it and `load_dotenv(path)`, or add
-  `env_file: ../.env`. **If it works, strip the redundant `Environment=` /
+### 7.2 Work from Dave's 2026-08-03 list
+
+**DONE before the handover** (on the outgoing box, already on `main`):
+- **`setup_openwebui.py` → alias-keyed `MODEL_TUNING`.** All per-model knobs in one
+  nested structure at the top of the file, keyed by served alias. Verified
+  behaviour-preserving and idempotent. Adding the Spark model = add one entry
+  keyed `qwen3-vl-30b-a3b` — **already seeded**, it activates when vLLM serves that
+  alias. Watch for the printed NOTE when two aliases share a `preset_id`.
+- **Tracing endpoints via `.env`.** `tests/tracing/ragfarm_env.py` resolves every
+  endpoint (shell > `.env` > real-port defaults). All 8 tools import cleanly.
+  `python-dotenv==1.2.2` is in all three locks.
+- **`cu12` → `cu13` profile** + `sympy` pin corrected (torch 2.13.0 needs
+  `>=1.13.3`; two of three locks had 1.13.1 and would fail to resolve).
+- **ADR-0013, CLAUDE.md Ch1/Ch2, BUILD_STATE steps 01–03/07** — all retargeted.
+
+**STILL OPEN:**
+- **`.env` inside containers.** Answered but not implemented: `load_dotenv()` is
+  **verified working inside our containers**; what is missing is the *file* —
+  compose's `.env` handling only does `${VAR}` substitution in the compose file and
+  does not place it in the container. Recipe: bind-mount `../.env:/app/.env:ro` and
+  `load_dotenv("/app/.env")` in the service. Not done here because it could not be
+  validated before the move. **Once it works, strip the redundant `Environment=` /
   `EnvironmentFile=` from the units** — Dave wants units to carry policy, not config.
-- **All `tests/tracing/*.py` use wrong ports.** They predate the current layout.
-  Note `ragfarm_rag_tracer.py` wants `:8000` (mcpo), not `:8104`.
+- **Tracing rewrite.** Ports are fixed but the framework still has no concept of
+  thinking models. Requirements for the rewrite are in `tests/tracing/README.md`;
+  docstrings there still quote the old wrong ports and say so explicitly.
 - **MODEL.md auto-benchmark.** On model activation, run a canned benchmark and
   upsert prefill/decode tok/s into the model's parent-dir `MODEL.md`. This is the
-  instrument that settles NVFP4-vs-alternatives empirically — see §7.3.
-- **`docs/rag-pipeline.md`** — a single authoritative writeup (§5 here is the seed).
+  instrument that settles NVFP4-vs-alternatives empirically — see §7.3. **Not
+  started.**
+- **`docs/rag-pipeline.md`** — a single authoritative writeup. §5 here is the seed.
+  **Not started.**
 - **Docs and diagrams still describe the AMD box:** `README.md`,
   `docs/deployment.md`, `docs/prompts.md`, `docs/pdf/*.md`, and the four matplotlib
   architecture diagrams in `assets/ragfarm_*.png`. `docs/ryzenai/` should be
-  retired or clearly marked historical.
+  retired or clearly marked historical. **Not started.**
+- **`scripts/` model lifecycle is still GGUF-shaped.** `fetch-llm.sh`,
+  `activate-llm.sh`, `llama-launch.sh`, `lib-models.sh` and
+  `manifests/ragfarm-llama.service` all assume GGUF + `--mmproj`. They need a
+  safetensors/vLLM equivalent (`ragfarm-vllm.service`). **This is real work and it
+  is on the critical path for step 02.**
 
 ### 7.3 Numbers that are inferred, not measured
 Everything performance-related in ADR-0013 is tagged **MEASURE**. Specifically:
