@@ -22,6 +22,10 @@ Usage:
     --k-values 50,100,200,500
 """
 
+
+# Endpoints come from .env via the shared resolver — never hardcode ports.
+# See tests/tracing/ragfarm_env.py for the real port map.
+from ragfarm_env import MCPO_URL
 import json
 import sys
 import time
@@ -83,7 +87,7 @@ class RAGPipelineTrace:
 class RAGTracer:
     """Trace ragfarm RAG pipeline."""
     
-    def __init__(self, rag_endpoint: str = "http://127.0.0.1:8000", chat_id: Optional[str] = None):
+    def __init__(self, rag_endpoint: str = MCPO_URL, chat_id: Optional[str] = None):
         self.rag_endpoint = rag_endpoint
         self.chat_id = chat_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session = requests.Session()
@@ -309,14 +313,14 @@ Examples:
     trace_cmd = subparsers.add_parser("trace", help="Trace single RAG query")
     trace_cmd.add_argument("--chat-id", required=True)
     trace_cmd.add_argument("--query", required=True)
-    trace_cmd.add_argument("--rag-endpoint", default="http://127.0.0.1:8000")
+    trace_cmd.add_argument("--rag-endpoint", default=MCPO_URL)
     trace_cmd.add_argument("--k", type=int, default=50)
     trace_cmd.add_argument("--output", type=str, default=None)
     
     # Evolve command
     evolve_cmd = subparsers.add_parser("evolve", help="Show pool evolution with different k")
     evolve_cmd.add_argument("--query", required=True)
-    evolve_cmd.add_argument("--rag-endpoint", default="http://127.0.0.1:8000")
+    evolve_cmd.add_argument("--rag-endpoint", default=MCPO_URL)
     evolve_cmd.add_argument("--k-values", type=str, default="50,100,200,500")
     
     args = parser.parse_args()

@@ -19,6 +19,10 @@ Usage:
   - Parse output for complete visibility into chat orchestration overhead
 """
 
+
+# Endpoints come from .env via the shared resolver — never hardcode ports.
+# See tests/tracing/ragfarm_env.py for the real port map.
+from ragfarm_env import LLM_URL
 import json
 import sys
 import time
@@ -434,7 +438,7 @@ Examples:
                        help="Run demo with simulated chat session")
     parser.add_argument("--listen", type=str, default="0.0.0.0:8002",
                        help="Listen address for proxy mode")
-    parser.add_argument("--forward", type=str, default="localhost:8001",
+    parser.add_argument("--forward", type=str, default=LLM_URL,
                        help="Forward to vLLM address")
     parser.add_argument("--output", type=str, default=None,
                        help="Output file for trace JSON")

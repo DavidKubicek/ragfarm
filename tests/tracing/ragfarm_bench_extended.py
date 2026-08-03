@@ -14,6 +14,10 @@ All payloads captured: request IN (prompt, tokens), response OUT (completion, to
 Structured timeline with step-by-step breakdown.
 """
 
+
+# Endpoints come from .env via the shared resolver — never hardcode ports.
+# See tests/tracing/ragfarm_env.py for the real port map.
+from ragfarm_env import LLM_URL
 import json
 import sys
 import time
@@ -134,7 +138,7 @@ class BenchRun:
 class LlamaServerBench:
     """Benchmark with full transparency into every stage."""
     
-    def __init__(self, base_url: str = "http://localhost:8001", timeout: int = 120):
+    def __init__(self, base_url: str = LLM_URL, timeout: int = 120):
         self.base_url = base_url
         self.timeout = timeout
         self.session = requests.Session()
@@ -520,8 +524,8 @@ Examples:
   ./ragfarm_bench_extended.py --rag 5 --csv bench.csv  # Save results
         """
     )
-    parser.add_argument("--url", default="http://localhost:8001",
-                       help="llama-server URL (default: localhost:8001)")
+    parser.add_argument("--url", default=LLM_URL,
+                       help="LLM base URL (default: LLM_URL from .env, normally :8080)")
     parser.add_argument("--max-tokens", type=int, default=256,
                        help="Max completion tokens (default: 256)")
     parser.add_argument("--prompt", type=str, default=None,

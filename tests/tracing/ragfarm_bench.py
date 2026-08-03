@@ -15,6 +15,10 @@ Measures:
 Output: formatted terminal display, optional CSV/JSON for tracking.
 """
 
+
+# Endpoints come from .env via the shared resolver — never hardcode ports.
+# See tests/tracing/ragfarm_env.py for the real port map.
+from ragfarm_env import LLM_URL
 import json
 import subprocess
 import sys
@@ -78,7 +82,7 @@ class BenchRun:
 class LlamaServerBench:
     """Benchmark harness for llama-server endpoints."""
     
-    def __init__(self, base_url: str = "http://localhost:8001", timeout: int = 120):
+    def __init__(self, base_url: str = LLM_URL, timeout: int = 120):
         self.base_url = base_url
         self.timeout = timeout
         self.session = requests.Session()
@@ -366,8 +370,8 @@ Examples:
   python ragfarm_bench.py --rag 3 --max-tokens 256 --csv bench_$(date +%s).csv
         """
     )
-    parser.add_argument("--url", default="http://localhost:8001",
-                       help="llama-server base URL (default: localhost:8001)")
+    parser.add_argument("--url", default=LLM_URL,
+                       help="llama-server base URL (default: LLM_URL from .env, normally :8080)")
     parser.add_argument("--max-tokens", type=int, default=256,
                        help="Max completion tokens (default: 256)")
     parser.add_argument("--prompt", type=str, default=None,

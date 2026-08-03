@@ -18,6 +18,10 @@ Usage:
 Then configure Open WebUI to use http://localhost:8000 as LLM endpoint.
 """
 
+
+# Endpoints come from .env via the shared resolver — never hardcode ports.
+# See tests/tracing/ragfarm_env.py for the real port map.
+from ragfarm_env import LLM_URL
 import json
 import sys
 import time
@@ -493,7 +497,7 @@ Examples:
     )
     parser.add_argument("--listen", type=str, default="0.0.0.0:8000",
                        help="Listen address for proxy")
-    parser.add_argument("--generation", type=str, default="localhost:8001",
+    parser.add_argument("--generation", type=str, default=LLM_URL,
                        help="Generation llama.cpp endpoint")
     parser.add_argument("--reranker", type=str, default=None,
                        help="Reranker endpoint")

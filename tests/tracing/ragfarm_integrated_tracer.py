@@ -25,6 +25,10 @@ Usage (with HTTP tracing):
 Or: Parse existing Open WebUI network logs to extract call sequences.
 """
 
+
+# Endpoints come from .env via the shared resolver — never hardcode ports.
+# See tests/tracing/ragfarm_env.py for the real port map.
+from ragfarm_env import LLM_URL
 import json
 import sys
 import time
@@ -456,7 +460,7 @@ Examples:
     
     # Analyze command
     analyze_cmd = subparsers.add_parser("analyze", help="Query engines for live telemetry")
-    analyze_cmd.add_argument("--generation", default="localhost:8001")
+    analyze_cmd.add_argument("--generation", default=LLM_URL)
     analyze_cmd.add_argument("--reranker", default=None)
     analyze_cmd.add_argument("--embedder", default=None)
     
