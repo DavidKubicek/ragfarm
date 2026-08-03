@@ -25,22 +25,28 @@ ADR-0013 targets `--moe-backend flashinfer` as "the b12x path". On this box:
 - **`flashinfer` is not a valid flag value** in vLLM 0.26.0. The choices are
   `flashinfer_b12x`, `flashinfer_cutedsl`, `flashinfer_cutlass`, `flashinfer_trtllm`,
   `cutlass`, `marlin`, `triton`, … Passing `flashinfer` is rejected by argparse.
-- **`flashinfer_b12x` does NOT work on GB10.** Forcing it fails with
-  `NvFp4 MoE backend 'FLASHINFER_B12X' does not support the deployment configuration
-  since kernel does not support current device cuda`. vLLM's own oracle
-  (`fused_moe/oracle/nvfp4.py`) says why: *"FLASHINFER_B12X is intentionally excluded
-  from auto-selection until the upstream CUTLASS SM121 MMA op guard is resolved"*.
-  So the guard ADR-0013 treats as fixed by CUTLASS #3096 is, per shipping code, open.
-- **What we actually run: `FLASHINFER_CUTLASS`**, selected by `--moe-backend auto`,
-  with `FlashInferCutlassNvFp4LinearKernel` for the linear NVFP4 GEMM. This is
-  native FP4 and ranks ABOVE `MARLIN` in the oracle's preference order, so the
-  marlin fallback (which dequantizes FP4→BF16) is NOT in use.
+- **`flashinfer_b12x` DOES work on GB10** — verified 2026-08-03. All three of
+  `_supports_current_device()`'s conditions pass (`is_cuda`,
+  `is_device_capability_family(120)`, `has_flashinfer_b12x_moe()`), it serves, and
+  it generates coherent text including Czech — not the `!!!!!` mode.
+  It is however **opt-in only**: vLLM's oracle excludes it from *auto*-selection
+  "until the upstream CUTLASS SM121 MMA op guard is resolved".
+- **What we run by default: `FLASHINFER_CUTLASS`**, via `--moe-backend auto`, with
+  `FlashInferCutlassNvFp4LinearKernel` for the linear NVFP4 GEMM. Native FP4, ranked
+  ABOVE `MARLIN` — the marlin dequant fallback was never needed on this box.
 
-**Backend selection depends on JIT cache state — do not read one log line as fact.**
-An early run picked `VLLM_CUTLASS` only because FlashInfer could not JIT-compile
-(no `ninja` on the unit's PATH); once that was fixed the higher-ranked
-`FLASHINFER_CUTLASS` became available. `auto` is therefore the right setting:
-it re-evaluates what is genuinely available instead of pinning a stale choice.
+Measured decode (256 tok, `ignore_eos`, single stream, 3 runs):
+**`flashinfer_b12x` 75.6 tok/s** vs **`FLASHINFER_CUTLASS` 71.1 tok/s**. b12x is
+~6% faster, but that is decode — which is bandwidth-bound and so the least
+favourable comparison for FP4. Prefill is unmeasured. Default stays `auto`: 6% does
+not justify overriding an explicit upstream "not safe to auto-select yet" on a
+production box.
+
+> **Do not conclude a FlashInfer backend is unsupported without checking PATH.**
+> An earlier run here reported b12x as `does not support current device cuda` and a
+> different run picked `VLLM_CUTLASS` — both were artifacts of `ninja` missing from
+> the unit's PATH, since `has_flashinfer_b12x_moe()` probes by import. Backend
+> selection also shifts with JIT cache state, so one log line is not a fact.
 
 ## Startup memory — the two budgets are NOT the same lever
 

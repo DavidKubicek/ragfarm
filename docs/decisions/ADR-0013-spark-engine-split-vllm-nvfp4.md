@@ -94,6 +94,52 @@ enable it there.
 of writing), not merely ≥0.19.0.** Community model cards citing v0.13.0 predate all
 of this.
 
+#### VERIFIED ON HARDWARE — 2026-08-03, vLLM 0.26.0 / flashinfer 0.6.14 / CUDA 13.0
+
+Era 2 above is **confirmed on the actual GB10**, with three corrections to the
+mechanics. Everything here was measured on the box, not inferred.
+
+1. **`--moe-backend flashinfer` is not a valid value.** The flag takes
+   `flashinfer_b12x`, `flashinfer_cutedsl`, `flashinfer_cutlass`,
+   `flashinfer_trtllm`, `cutlass`, `marlin`, `triton`, … — argparse rejects a bare
+   `flashinfer`. Wherever this ADR says "`flashinfer` (b12x)", the literal value is
+   **`flashinfer_b12x`**.
+2. **b12x works on sm_121, and its guard conditions all pass.**
+   `FlashInferB12xExperts._supports_current_device()` requires `is_cuda()` AND
+   `is_device_capability_family(120)` AND `has_flashinfer_b12x_moe()`; on GB10 all
+   three return True, and the module is documented for "SM12x (SM120/SM121)".
+   Verified generation is coherent, including Czech — **not** the `!!!!!` mode.
+3. **b12x is opt-in only.** vLLM's oracle (`fused_moe/oracle/nvfp4.py`) excludes it
+   from *auto*-selection "until the upstream CUTLASS SM121 MMA op guard is
+   resolved". `auto` therefore lands on **`FLASHINFER_CUTLASS`** — which is still
+   native FP4 and still ranks ABOVE `MARLIN`. **The marlin fallback was never
+   needed on this box.**
+
+Measured decode, identical probe, 256 tokens, `ignore_eos`, single stream, 3 runs:
+
+| backend | tok/s | note |
+|---|---|---|
+| `flashinfer_b12x` | 75.5 / 75.7 / 75.7 → **75.6** | opt-in; tool-calling verified |
+| `FLASHINFER_CUTLASS` (`auto`) | 68.8 / 73.1 / 71.3 → **71.1** | upstream-blessed default |
+
+**This measures decode only, and decode is bandwidth-bound** — so the ~6% gap is
+the *least* favourable comparison for FP4. Prefill, where this ADR predicts the
+real win, is still **UNMEASURED**.
+
+**Recommended default: `auto`**, not b12x, despite b12x being faster. The 6% does
+not buy enough to override an explicit upstream "not safe to auto-select yet" on a
+production box; three probes cannot clear a kernel guard that upstream has not.
+Revisit when the SM121 MMA guard lands. The knob is `LLM_MOE_BACKEND` in `.env`,
+so switching costs a restart and no code change.
+
+> **A diagnostic trap that cost hours, recorded so it is not re-learned.** b12x
+> *appeared* unsupported — it failed with "kernel does not support current device
+> cuda" — purely because `ninja` was not on the service PATH.
+> `has_flashinfer_b12x_moe()` probes by import, so a missing build tool is
+> indistinguishable from an unsupported device in that error message. **Before
+> concluding any FlashInfer backend is unsupported here, confirm `ninja` and
+> `nvcc` are on the unit's PATH.**
+
 Consequence for expectations, corrected: NVFP4 should be **meaningfully faster than
 Q4_K_M**, not merely equal-with-better-numerics. Q4_K_M in llama.cpp always
 dequantizes to FP16/BF16 for the matmul and has no native-4-bit compute path at
@@ -108,6 +154,13 @@ per token**. At ~221 GB/s that is a theoretical ceiling around ~140 tok/s; real
 decode will land well below it after attention and KV traffic (plus dequantization
 overhead if we end up on the Marlin fallback). The same 30B *dense* at 4-bit would stream ~15 GB/token —
 roughly an order of magnitude worse. That gap, not FP4, is the reason to go MoE.
+
+**FIRST REAL NUMBER (2026-08-03):** single-stream decode measured **75.6 tok/s** on
+`flashinfer_b12x` and **71.1 tok/s** on `FLASHINFER_CUTLASS` — i.e. **~51–54% of the
+~140 tok/s bandwidth ceiling**, which is a plausible place to land once attention and
+KV traffic are paid for. The estimate above therefore holds up as an upper bound.
+Still **UNMEASURED**: prefill tok/s (where FP4 should show its real advantage),
+actual memory bandwidth (221 vs 273 GB/s), and any batched/concurrent throughput.
 
 ## Decision
 
@@ -192,6 +245,49 @@ vLLM (LLM) + llama.cpp (reranker) + BGE-M3 (embedder) all draw on the same
 model" proposal must be argued against this budget. The second-Spark-over-
 ConnectX-7 path in `docs/hardware/NVIDIA-Spark.md` is the escape hatch if
 isolation becomes necessary.
+
+#### 5a. There are TWO memory budgets on this box, and they are different levers
+
+Added 2026-08-03 after the step-02 bring-up was OOM-killed three times. Conflating
+these two costs hours, because they present identically: the service loads all four
+shards and *then* dies, which reads as a slow model load rather than a fault.
+
+| budget | when it applies | knob | what it bounds |
+|---|---|---|---|
+| **Steady-state** | serving | `--gpu-memory-utilization` (`LLM_GPU_MEM_UTIL`) | model weights + KV cache |
+| **Cold-start build** | first run after a cache miss | **`MAX_JOBS`** | parallel CUDA compilers during JIT |
+
+**Steady-state.** Setting `--gpu-memory-utilization` explicitly is *mandatory* here,
+not tuning. The 0.9 default assumes a private VRAM pool; unified memory has none, so
+0.9 reserves ~108 GB of the shared 128 GB and starves the embedder, the reranker,
+Qdrant, the containers and the OS. Measured at **0.50 → KV cache 36.52 GiB
+(398,832 tokens)**, which is ample at 32k context.
+
+**Cold-start build — the non-obvious one.** FlashInfer JIT-compiles CUDA kernels at
+*runtime* on first use. `flashinfer/jit/cpp_ext.py` passes `-j` to ninja **only when
+`MAX_JOBS` is set**; unset, ninja defaults to `nproc+2` — 22 parallel compiles on
+this box. CUTLASS translation units are multi-GB each, so the compilers alone peaked
+at **~98 GB with ~13.6 GB of swap** and the OOM killer took the service.
+
+The diagnostic signature worth memorising: **the peak was 98.3–98.6 GB across three
+runs and did not move when `--gpu-memory-utilization`, `--max-num-batched-tokens`
+and `--max-num-seqs` were all lowered.** A peak that is invariant under every vLLM
+memory flag is not vLLM's memory. `MAX_JOBS=4` resolved it.
+
+`MAX_JOBS` is a **first-run limiter, not a steady-state setting**. Once
+`~/.cache/flashinfer/` and `~/.cache/vllm/torch_compile_cache/` are populated,
+startup skips compilation entirely — measured **813 s cold vs 3 m 11 s warm**, of
+which torch.compile was only 9.5 s. It can be unset once warm; re-set it before any
+vllm/flashinfer upgrade, CUDA bump, or new checkpoint, since each invalidates the
+JIT cache. Details and cache-inspection commands are in `.env.example`.
+
+**Corollary for aarch64.** Fewer prebuilt kernels ship for ARM, so more is JIT-built
+here than on x86. The Spark therefore needs a working compiler toolchain available
+to the *service at runtime*, not merely at build time: `ninja` and `nvcc` must be on
+the unit's PATH. `manifests/ragfarm-vllm.service` sets it, and `PATH` deliberately
+does **not** live in `.env` — that file is also read by the embedder/reranker units
+and injected into every container via compose `env_file`, so a `PATH` there would
+clobber it stack-wide.
 
 ### What is explicitly NOT changing
 
