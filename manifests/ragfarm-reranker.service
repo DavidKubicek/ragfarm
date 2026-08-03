@@ -16,7 +16,11 @@ User=dave
 # RERANK_GGUF_PATH default matches `scripts/fetch-encoder.sh`'s default fetch
 # target; EnvironmentFile is loaded AFTER so a value in .env (written by
 # fetch-encoder.sh when you swap models, or by hand) OVERRIDES this default.
-Environment=RERANK_GGUF_PATH=/home/dave/ragfarm/models/reranker/bge-reranker-v2-m3/bge-reranker-v2-m3-f16.gguf
+# CONFIG LIVES IN .env, NOT HERE — this unit carries start/stop/restart POLICY only.
+# The model-path default that used to sit here was stripped 2026-08-03: it pinned a
+# specific checkpoint, which goes stale the moment the model is swapped (it still
+# named a Qwen2.5 GGUF). If .env is missing the service should fail loudly rather
+# than silently serve the wrong model.
 EnvironmentFile=-/home/dave/ragfarm/.env
 WorkingDirectory=/home/dave/llama.cpp
 ExecStart=/home/dave/llama.cpp/build/bin/llama-server \

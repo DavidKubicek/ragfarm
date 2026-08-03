@@ -12,8 +12,11 @@ LimitMEMLOCK=infinity
 # LLM_GGUF_MMPROJ default is empty: text-only models pass no --mmproj. fetch-llm.sh
 # auto-detects a vision model and sets this in .env (activate-llm.sh does the same
 # when switching among models already on disk), overriding this default.
-Environment=LLM_GGUF_PATH=/home/dave/ragfarm/models/llm/qwen2.5-7b-instruct-gguf/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf
-Environment=LLM_GGUF_MMPROJ=
+# CONFIG LIVES IN .env, NOT HERE — this unit carries start/stop/restart POLICY only.
+# The model-path default that used to sit here was stripped 2026-08-03: it pinned a
+# specific checkpoint, which goes stale the moment the model is swapped (it still
+# named a Qwen2.5 GGUF). If .env is missing the service should fail loudly rather
+# than silently serve the wrong model.
 EnvironmentFile=-/home/dave/ragfarm/.env
 WorkingDirectory=/home/dave/llama.cpp
 # ExecStart delegates to a wrapper script (scripts/llama-launch.sh) rather than

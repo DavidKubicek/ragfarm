@@ -51,7 +51,8 @@ hybrid retrieval pipeline behind the `search_corpus` tool.
 
 ## 2. The single most important thing to know
 
-**GB10 is sm_121, not sm_120, and it has no usable native FP4 compute path.**
+**GB10 is sm_121, not sm_120 — and the MoE backend you pick decides whether you get
+native FP4 or silently forfeit it.**
 
 A misconfigured NVFP4 MoE on GB10 fails **silently**: vLLM starts fine, loads the
 model fine, then emits streams of `!!!!!`. Not a crash. **If generation output is
@@ -231,9 +232,25 @@ This directly attacks the recurring **context-blowup** problem and it is unblock
   behaviour-preserving and idempotent. Adding the Spark model = add one entry
   keyed `qwen3-vl-30b-a3b` — **already seeded**, it activates when vLLM serves that
   alias. Watch for the printed NOTE when two aliases share a `preset_id`.
-- **Tracing endpoints via `.env`.** `tests/tracing/ragfarm_env.py` resolves every
-  endpoint (shell > `.env` > real-port defaults). All 8 tools import cleanly.
-  `python-dotenv==1.2.2` is in all three locks.
+- **`.env` is now genuinely the single source of truth, end to end.**
+  `ragfarm_env.py` at the **repo root** is the canonical resolver (the tracing copy
+  is a thin shim). Run `python ragfarm_env.py` to print everything as resolved.
+  - Canonicalised the names. `LLM_URL`/`LLAMA_URL`, `EMBED_URL`/`EMBED_ENDPOINT`
+    and `RERANK_URL`/`RERANK_ENDPOINT` were competing spellings of the same thing;
+    base URLs are now the source and full endpoints are derived. Legacy names still
+    work and `deprecations()` reports any in use. `LLM_GGUF_PATH` →
+    `LLM_MODEL_PATH` (format-neutral, since vLLM serves safetensors).
+  - **Units carry policy only** — every `Environment=` config line is gone from
+    `manifests/*.service`. Note the llama unit had been pinning a *Qwen2.5 GGUF
+    path* as a baked-in default, which would have been actively wrong on the Spark.
+  - **Containers get `.env`** via `env_file: ../.env` in `infra/compose.yaml`
+    (verified: values arrive inside `infra-rag-retrieval`). Compose's own `.env`
+    handling only does `${VAR}` substitution and never puts the file in an image.
+  - `drifts()` warns if the materialized `EMBED_ENDPOINT`/`RERANK_ENDPOINT` fall out
+    of step with their base URLs — they are spelled out in `.env` only because the
+    frozen ingester and the containers cannot import the resolver.
+  - Verified by full `stack.sh restart`: all 6 endpoints healthy, end-to-end RAG
+    returns the identical gate result and top score as before the migration.
 - **`cu12` → `cu13` profile** + `sympy` pin corrected (torch 2.13.0 needs
   `>=1.13.3`; two of three locks had 1.13.1 and would fail to resolve).
 - **ADR-0013, CLAUDE.md Ch1/Ch2, BUILD_STATE steps 01–03/07** — all retargeted.
@@ -279,7 +296,35 @@ A trace proxy (`scripts/owui_trace_proxy.py`, port 8095) was built and then
 **retired** — it corrupted the OWUI DB and model presets during demo prep. It is
 still on disk. **Do not re-plumb it without a plan.**
 
-### 7.5 OpenNebula
+### 7.5 Corpus move and when to `--recreate`
+
+Dave moves the corpus to the same path (`/data/corpus`) by hand. The question is
+when the Qdrant collection must be rebuilt rather than incrementally synced.
+
+**Run `--recreate` when the *vectors* would change or the collection does not
+exist.** Specifically:
+
+1. **Always, on the Spark's first ingest** — it is a fresh box with no collection.
+   This is the normal case and needs no deliberation.
+2. **If the embedder's output changed** — the big one. Existing vectors were
+   produced by the **CPU** BGE-M3; step 03 moves it to **CUDA**. If the CUDA build
+   does not reproduce the CPU vectors to tolerance, every stored vector is subtly
+   wrong and *nothing will error* — retrieval just quietly degrades. Verify with the
+   step-03 gate; if it fails, `--recreate` is mandatory, not optional.
+3. **If the embedding model or its revision changed** (different BGE-M3 snapshot).
+4. **If the chunking changed** — not applicable while `ingester.py` and
+   `xlsx_tables.py` stay frozen, which they should.
+
+**Do NOT `--recreate` for:** the corpus merely moving path, files being added,
+removed or edited, or a serving-engine change. The ADR-0006 manifest handles
+content-addressed incremental sync for all of those — that is its entire job.
+
+**Ordering matters:** `--recreate` needs the embedder (`:8090`) live, so it belongs
+in **step 04, after step 03 passes its gate** — never before. And per the hard
+rules, **ask Dave before any `--recreate` on a live corpus**; on the Spark's first
+build there is nothing live to destroy, which is exactly why doing it then is cheap.
+
+### 7.6 OpenNebula
 Steps 05/06 are `BLOCKED` because the PoC box had no cluster access. The Spark is
 production, so creds may now be obtainable — **ask Dave**. Never mock `where_is_vm`
 to force a gate.
@@ -369,8 +414,26 @@ logs/<NN-stepname>.log        raw build output — gitignored, never inlined any
    Qdrant + ingest through the frozen parser.
 3. **Step 07** — OWUI + mcpo + rag-retrieval; prove the RAG-only gate.
 4. **Calibrate `RAG_MIN_SCORE`** (§7.1). Highest leverage, fully unblocked.
-5. **Then the §7.2 backlog** — alias-keyed presets, `.env` SSoT, tracing rewrite,
-   MODEL.md benchmarks, docs and diagrams.
+5. **Then the §7.2 backlog** — the `scripts/` vLLM lifecycle rework first (it is on
+   the critical path), then the tracing rewrite and the MODEL.md benchmark hook.
+
+6. **DOCS AND DIAGRAMS LAST — deliberately.** `docs/rag-pipeline.md`, `README.md`,
+   `docs/deployment.md`, `docs/prompts.md`, `docs/pdf/*.md` and the four matplotlib
+   diagrams in `assets/ragfarm_*.png` are the **final** task, not an early one.
+
+   This is not procrastination, it is sequencing. Right now you know this system
+   only from documents written by someone else. After you have actually built it —
+   hit the real failure modes, measured the real numbers, discovered which of the
+   `MEASURE`-tagged claims were wrong — you will be able to write documentation
+   that is *true*, with real benchmarks in it, instead of paraphrasing this handoff.
+   Documentation written before the build encodes assumptions; written after, it
+   encodes knowledge.
+
+   Concretely, by then you should be able to fill in: real memory bandwidth,
+   real prefill/decode tok/s for the served model, whether flashinfer b12x worked
+   or you fell back to marlin, the calibrated `RAG_MIN_SCORE`, and the actual
+   dependency graph the diagrams should show. **Update the diagrams from what the
+   system is, not from what ADR-0013 predicted.**
 6. **ADR-0012 Phase 1** (Docling + scanned-PDF OCR) closes a real gap: scanned PDFs
    are currently **skipped** entirely by the ingester.
 7. **ADR-0011 Phase 1** — author real workbooks, then the execution loop. Note it

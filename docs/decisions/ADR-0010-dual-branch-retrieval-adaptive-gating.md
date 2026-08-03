@@ -1,8 +1,21 @@
 # ADR-0010 — Dual-branch retrieval: LightRAG traversal branch + adaptive score-gating
 Author: David Kubicek (david.kubicek@eywo.cz)
 
-Status: ACCEPTED (2026-07-30) for the *architecture*; two parts carry tracked
-implementation debt (below). Three decisions are accepted and binding:
+Status: **IN PROGRESS** (2026-08-03). The *architecture* was ACCEPTED 2026-07-30 and
+is not reopened; implementation is partially landed, which is why this is IN
+PROGRESS rather than ACCEPTED (which would overstate) or PENDING (which would
+understate). Concretely:
+- **§1 adaptive cut — CODE LANDED 2026-07-31**, not yet verified by Dave.
+  `_gate()` + `_kneedle_cut()` are live in `services/rag-retrieval/server.py`, unit-
+  tested, and reporting via `_timing_ms.gate`. **`RAG_MIN_SCORE` is still 0.0 —
+  the floor is OFF and only the Kneedle hatch is cutting.** Calibration is the
+  remaining work; it also closes ADR-0008's last open item.
+- **§2 LightRAG traversal branch — NOT BUILT.** Specified here, kept dark by
+  `RAG_LIGHTRAG=0`.
+Promote to ACCEPTED when the floor is calibrated and the traversal branch lands.
+
+Original status line, for the record: ACCEPTED (2026-07-30) for the *architecture*;
+two parts carry tracked implementation debt (below). Three decisions are accepted and binding:
 (1) the candidate cut becomes an **empirically-calibrated absolute floor** plus a
 **Kneedle adaptive escape hatch**, replacing the placeholder `RAG_MIN_SCORE=0.0`
 left open by ADR-0008; (2) a **second, parallel LightRAG graph-traversal branch**

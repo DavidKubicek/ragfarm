@@ -10,7 +10,11 @@ User=dave
 # target (a real in-repo copy under models/embeddings/, not the HF cache);
 # EnvironmentFile is loaded AFTER so a value in .env (written by fetch-encoder.sh
 # when you swap models, or by hand) OVERRIDES this default.
-Environment=EMBED_MODEL_PATH=/home/dave/ragfarm/models/embeddings/bge-m3
+# CONFIG LIVES IN .env, NOT HERE — this unit carries start/stop/restart POLICY only.
+# The model-path default that used to sit here was stripped 2026-08-03: it pinned a
+# specific checkpoint, which goes stale the moment the model is swapped (it still
+# named a Qwen2.5 GGUF). If .env is missing the service should fail loudly rather
+# than silently serve the wrong model.
 EnvironmentFile=-/home/dave/ragfarm/.env
 ExecStart=/home/dave/ragfarm/.venv/bin/python /home/dave/ragfarm/services/embedder/server.py
 # Reranking is a SEPARATE service now (manifests/ragfarm-reranker.service, GPU

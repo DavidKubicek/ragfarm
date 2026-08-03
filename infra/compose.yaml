@@ -12,6 +12,17 @@
 # NOTE: image *pulls* go through the Docker daemon, not these vars — configure the
 # daemon's proxy separately (docs/ or /etc/systemd/system/docker.service.d/) if the
 # registry is only reachable via proxy.
+# .env AT THE REPO ROOT IS THE SINGLE SOURCE OF TRUTH (2026-08-03).
+# `env_file` injects it into each container as real environment variables. This is
+# NOT the same as compose's own `.env` handling, which only does ${VAR} substitution
+# in THIS FILE and never puts anything inside a container. python-dotenv is verified
+# to work in our images, but the file itself is absent from them — hence env_file.
+# Values set under a service's `environment:` still win over the file, so the
+# container-specific overrides below (e.g. host.docker.internal wiring) are safe.
+x-env-file: &env_file
+  - path: ../.env
+    required: false
+
 x-proxy-env: &proxy_env
   HTTP_PROXY: ${HTTP_PROXY:-}
   HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -37,6 +48,10 @@ services:
     # ONE_MOCK defaults to 1 (canned data) so the integration can be tested with no
     # cluster; set ONE_MOCK=0 once real ONE_XMLRPC/ONE_AUTH are in .env.
     env_file:
+      # repo-root .env first (the base), then the service-specific file so it can
+      # override. Later entries win in compose.
+      - path: ../.env
+        required: false
       - path: ../services/mcp-placement/.env
         required: false
     environment:
@@ -52,6 +67,10 @@ services:
     # HOST_MOCK defaults to 1 (simulated drain/reboot, nothing real); set HOST_MOCK=0
     # at deployment. HOST_ALLOWLIST gates confirm=True actions (mock nodes here).
     env_file:
+      # repo-root .env first (the base), then the service-specific file so it can
+      # override. Later entries win in compose.
+      - path: ../.env
+        required: false
       - path: ../services/mcp-host-control/.env
         required: false
     environment:
@@ -65,6 +84,7 @@ services:
     build: ../services/mcp-fs
     container_name: infra-mcp-fs
     restart: unless-stopped
+    env_file: *env_file
     environment:
       <<: *proxy_env
       FS_SANDBOX_ROOT: /data/corpus
@@ -82,6 +102,7 @@ services:
     container_name: infra-rag-retrieval
     restart: unless-stopped
     network_mode: host
+    env_file: *env_file
     environment:
       <<: *proxy_env
       QDRANT_URL: http://127.0.0.1:6333
@@ -103,6 +124,7 @@ services:
     container_name: infra-mcpo
     restart: unless-stopped
     network_mode: host
+    env_file: *env_file
     environment:
       <<: *proxy_env
       # CONNECTION_TIMEOUT is used as the SSE-read timeout for MCP subprocess calls
@@ -154,6 +176,7 @@ services:
     container_name: infra-open-webui
     restart: unless-stopped
     network_mode: host
+    env_file: *env_file
     environment:
       <<: *proxy_env
       HOST: ${OWUI_HOST:-0.0.0.0}    # 0.0.0.0 = reachable remotely (auth-gated); set 127.0.0.1 for loopback-only

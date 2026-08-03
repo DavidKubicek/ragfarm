@@ -6,14 +6,12 @@ Wants=network-online.target ragfarm-embedder.service
 [Service]
 Type=simple
 User=dave
+# CONFIG LIVES IN .env, NOT HERE. This unit carries start/stop/restart POLICY only.
+# CORPUS_PATH, QDRANT_URL, EMBED_ENDPOINT, QDRANT_COLLECTION and the INGEST_* watch
+# knobs all moved to the repo-root .env (2026-08-03). ingester.py is FROZEN and
+# reads os.environ directly, so systemd loads .env for it here rather than the
+# process calling load_dotenv itself.
 EnvironmentFile=-/home/dave/ragfarm/.env
-Environment=CORPUS_PATH=/data/corpus
-Environment=QDRANT_URL=http://127.0.0.1:6333
-Environment=EMBED_ENDPOINT=http://127.0.0.1:8090/embed
-Environment=QDRANT_COLLECTION=corpus
-Environment=INGEST_DELETE_GRACE=120
-Environment=INGEST_SCAN_INTERVAL=3600
-Environment=INGEST_DEBOUNCE=60
 WorkingDirectory=/home/dave/ragfarm
 ExecStart=/home/dave/ragfarm/.venv/bin/python /home/dave/ragfarm/services/ingester/ingester.py --watch
 Restart=on-failure
