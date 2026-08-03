@@ -1,4 +1,12 @@
+#!/usr/bin/env python3
 """ragfarm_env — the canonical resolver for every ragfarm endpoint and path.
+
+RUN IT to see the whole environment as the code actually resolves it:
+    ./ragfarm_env.py
+
+IMPORT IT so config comes from one place instead of hand-typed variable names:
+    from ragfarm_env import LLM_URL, EMBED_ENDPOINT
+
 
 `.env` AT THE REPO ROOT IS THE SINGLE SOURCE OF TRUTH. This module is how Python
 code gets at it. Import it instead of calling `os.environ.get` with a hand-typed
@@ -56,6 +64,30 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
+
+# Run directly (`./ragfarm_env.py`) with an interpreter that lacks python-dotenv and
+# we would read NO .env and print built-in defaults — output that looks fine and is
+# wrong. The system python3 does not have python-dotenv; the project venv does. So
+# when executed as a script, hand off to the venv interpreter if this one can't do
+# the job. Importing is unaffected: callers already run under the venv.
+if __name__ == "__main__":
+    try:
+        import dotenv as _probe  # noqa: F401
+    except ImportError:
+        _venv_py = pathlib.Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+        # Loop guard is a sentinel env var, NOT a path comparison: a venv's
+        # bin/python is typically a SYMLINK to the base interpreter, so comparing
+        # resolved paths makes them look identical and the hand-off never fires.
+        # What distinguishes them is site-packages, which resolve() cannot see.
+        if _venv_py.exists() and os.environ.get("_RAGFARM_ENV_REEXEC") != "1":
+            os.environ["_RAGFARM_ENV_REEXEC"] = "1"
+            os.execv(str(_venv_py), [str(_venv_py), os.path.abspath(__file__), *sys.argv[1:]])
+        print("WARNING: python-dotenv is unavailable"
+              f"{' and the re-exec into .venv did not resolve it' if os.environ.get('_RAGFARM_ENV_REEXEC') == '1' else ' and no project .venv was found'}.\n"
+              "         .env was NOT read — the values below are built-in defaults only.\n"
+              "         Fix: .venv/bin/pip install python-dotenv\n",
+              file=sys.stderr)
 
 __all__ = [
     "REPO_ROOT", "ENV_FILE",
