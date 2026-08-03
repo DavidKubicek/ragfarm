@@ -27,6 +27,11 @@
 #   scripts/deploy.sh --list          # list phases in order
 #   scripts/deploy.sh --profile cu13  # select dep/torch profile (default: cpu)
 #   scripts/deploy.sh --recreate-corpus   # force a corpus rebuild (alias switch)
+#   scripts/deploy.sh --fresh         # FORCE_ALL=1: rebuild everything, ignoring
+#                                     # the per-fragment "already done" guards.
+#                                     # Use for bare-metal reproduction; the plain
+#                                     # invocation is the code-release path and
+#                                     # leaves .venv/models alone unless required.
 # =============================================================================
 set -euo pipefail
 
@@ -62,6 +67,13 @@ STACK_UNIT="ragfarm-stack.service"
 WATCH_UNIT="ragfarm-ingester-watcher.service"
 
 RECREATE_CORPUS=0
+# FORCE_ALL=1 (via --fresh) makes every deploy-step fragment's "already satisfied"
+# guard fall through to the real work. Default 0 = idempotent code-release deploy:
+# fragments whose work is already done skip, so .venv and models are not rebuilt
+# unless the update actually requires it. See CLAUDE.md "deploy.sh fragment
+# contract" — build-step agents append their verified fragments below, each one
+# guarded, in NN order.
+FORCE_ALL="${FORCE_ALL:-0}"
 
 # profile → which committed lock + torch wheel index. This is the CPU/CUDA seam
 # from ADR-0006: same package set, different torch build. Extend here for prod.
@@ -353,6 +365,7 @@ main() {
 			--from)            mode=from; target="${2:-}"; shift ;;
 			--profile)         PROFILE="${2:-}"; shift ;;
 			--recreate-corpus) RECREATE_CORPUS=1 ;;
+			--fresh)           FORCE_ALL=1 ;;
 			-h|--help)         sed -n '2,40p' "$0"; exit 0 ;;
 			--*)               die "unknown option: $1" ;;
 			*)                 mode=one; target="$1" ;;

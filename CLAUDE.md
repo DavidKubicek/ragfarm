@@ -17,63 +17,86 @@ defines exactly how to use the first two.
 ## Chapter 1 — Architecture, constraints, build-order definition
 
 You are continuing a project scaffolded in a planning session. Read `README.md`
-and `docs/decisions/ADR-0001` and `ADR-0002` first — they explain *why* the
-architecture is shaped this way. Do not redesign the engine split without
-updating ADR-0001.
+and `docs/decisions/ADR-0013` first — it is the live engine-split decision and it
+**supersedes ADR-0001**. Read ADR-0003 (agent layer) and ADR-0006 (manifest) next.
+Do not redesign the engine split without updating ADR-0013.
+
+> **ADR-0001 and everything about the AMD Ryzen box (NPU, iGPU, Vulkan, Quark,
+> ROCm, `docs/ryzenai/`) is HISTORICAL.** It is kept for provenance. Do not act on
+> it, do not "restore" it, and do not treat its numbers as current.
 
 ### The single most important constraint
-Target is **Linux** on an AMD **Ryzen AI 9 HX 370**. On Linux, AMD RyzenAI 1.7.1
-gives an **NPU-only LLM flow**; the hybrid single-model NPU+iGPU flow is
-**Windows-only**, and **llama.cpp reaches the iGPU only, never the NPU**.
-Therefore the engine split is:
+Target is **Linux on an NVIDIA DGX Spark (GB10 Grace Blackwell)**, compute
+capability **sm_121**, 128 GB unified memory, ~221–273 GB/s memory bandwidth
+(**measure it** — model sizing keys off this number). The engine split is:
 
-- **iGPU** runs the generative LLM (llama.cpp + Vulkan).
-- **NPU** runs the embedding model (RyzenAI EP, quantized with AMD Quark).
+- **CUDA / vLLM** runs the generative LLM.
+- **CUDA / llama.cpp `--reranking`** runs the cross-encoder reranker, at *lowered
+  scheduling priority* so the interactive LLM wins contention.
+- **CUDA** runs the BGE-M3 embedder (bursty: heavy at ingest, trivial per query).
 - **CPU** runs Qdrant + the MCP services.
 
-If you are ever tempted to "just use the NPU for the LLM," re-read ADR-0001:
-decode on the NPU is ~17 tok/s and unsuitable for an interactive agent.
+**Decode is memory-bandwidth-bound.** Choose models by *active* parameters, not
+total — which is why the target is an MoE and never a dense 70B. All three GPU
+consumers share one memory pipe; there is no separate VRAM to hide in. Argue every
+"just add another model" against that budget.
+
+**The sm_121 FP4 trap — read this before debugging any garbage output.** GB10 is
+sm_121, *not* sm_120. FlashInfer-TRTLLM's FP4 MoE kernels gate on SM100+ and
+reject 12.x; the CUTLASS FP4 GEMM fallback fails on sm_120/121. The working MoE
+path is **Marlin W4A16**, so **`--moe-backend marlin` is mandatory**. Omit it and
+the model loads cleanly, then emits streams of `!!!!!` — a silent numerical
+failure, not a crash. Check this **first** when output is garbage. Full reasoning
+in ADR-0013.
 
 ### Models and how to engage them
-- **Generative LLM:** `Qwen2.5-7B-Instruct`, GGUF **Q4_K_M**, served by
-  `llama-server` (Vulkan) on `127.0.0.1:8080`, OpenAI-compatible, `--jinja` on
-  for tool-calling. This is the model the agent/gateway drives.
-- **Embedding model (NPU):** a BF16-friendly sentence encoder (BGE/E5/MiniLM
-  class). Quantize/compile with **AMD Quark** → RyzenAI ONNX EP. Expose it as a
-  tiny HTTP `/embed` service on the host at `:8090` (ingester + retrieval call
-  it). Record exact model+revision in `models/embeddings/MODEL.md`.
-- **ROCm vs Vulkan:** use **Vulkan**. ROCm on gfx1150 is unofficial — explore
-  only after Vulkan works, and keep it behind its own ADR.
+- **Generative LLM:** `Qwen3-VL-30B-A3B-Instruct`, **NVFP4** safetensors, served by
+  **vLLM ≥ 0.19.0** on `127.0.0.1:8080`, OpenAI-compatible, with
+  `--enable-auto-tool-choice --tool-call-parser hermes` for tool calling and
+  `--moe-backend marlin`. Cap context with `--max-model-len`. This is the model the
+  agent/gateway drives, and the one all tuning happens on.
+- **Reranker:** `bge-reranker-v2-m3` at full quality on a llama.cpp CUDA
+  `llama-server --reranking`, `127.0.0.1:8081/reranking` (ADR-0008). Never shrink
+  it to buy bandwidth — that trades retrieval precision for latency, the wrong way
+  round for this system.
+- **Embedding model:** **BGE-M3** on CUDA, HTTP `/embed` on `:8090`, dense+sparse
+  (ADR-0002 — which *rejected* the NPU/Quark path; the filename misleads). Record
+  exact model+revision in `models/embeddings/MODEL.md`. Its output vectors must
+  match what is already in Qdrant, or the collection needs a re-ingest.
+- **Quantization:** prefer **NVFP4**; FP8 is the fallback if an NVFP4 checkpoint
+  misbehaves. GGUF/Q4_K_M is the *old* box's format — not the target here.
 
 ### Build-order definition (authoritative sequence)
-The order below is fixed and matches ADR-0001. Per-step commands and gate-checks
+The order below is fixed and matches ADR-0013. Per-step commands and gate-checks
 live in `BUILD_STATE.md`; this is the canonical list of *what* the steps are and
 *why they are ordered this way*.
 
-1. **npu-bringup** — stand up the NPU runtime first; the embedder depends on it.
-   Requires account-gated downloads only Dave can fetch.
-2. **igpu-llm** — build llama.cpp+Vulkan and serve Qwen2.5-7B; the agent layer
+1. **venv-cuda13** — build the Python environment against CUDA 13
+   (`--profile cu13`). Everything downstream imports from it, so it is first.
+2. **vllm-serving** — install/serve vLLM with the NVFP4 model; the agent layer
    depends on this endpoint.
-3. **embedder-service** — wrap the Quark-compiled encoder behind `:8090/embed`;
-   ingestion and retrieval depend on it.
-4. **qdrant-ingester** — bring up Qdrant and ingest a test corpus; retrieval
-   depends on a populated collection.
+3. **embedder-service** — BGE-M3 on CUDA behind `:8090/embed`; ingestion and
+   retrieval depend on it.
+4. **qdrant-ingester** — bring up Qdrant and ingest the corpus; retrieval depends
+   on a populated collection.
 5. **mcp-placement** — already written and unit-tested; it is the **reference
    implementation**. Wire real OpenNebula creds and verify against the live
    cluster. Model the other MCPs on it.
 6. **mcp-fs-host-control** — fs-agent and host-control stubs. host-control is
    SAFETY-GATED (dry-run default, allowlist, confirm flag) — keep it that way;
    implement drain-then-reboot via OpenNebula before enabling real actions.
-7. **agent-wiring** — client-side agent: OpenAI-compatible client → llama-server,
-   MCP client → the HTTP MCP servers, expose tools to the model. Add a
+7. **agent-wiring** — Open WebUI + mcpo over the OpenAI-compatible endpoint, MCP
+   client → the HTTP MCP servers, tools exposed to the model, including the
    `rag-retrieval` MCP that queries Qdrant (`search_corpus`).
 
 ### Salvaged context from the originating planning session
-- The engine-split decision and the measured NPU prefill/decode numbers live in
-  ADR-0001 and `docs/ryzenai/AMD_FACTS.md`.
+- The live engine-split decision and the sm_121 FP4 analysis live in ADR-0013;
+  `docs/hardware/NVIDIA-Spark.md` is the hardware record.
 - OpenNebula is the placement owner (XML-RPC `one.vm.info` / `one.vmpool.info`);
   the placement MCP is built around that, **not** libvirt.
-- "Quark" = AMD's quantizer for the NPU embedding path (ADR-0002).
+- The retrieval pipeline is deliberately **serving-engine agnostic** (ADR-0003).
+  That is why swapping llama.cpp → vLLM touches the serving plane and almost
+  nothing else. Keep it that way.
 
 ### Open questions for Dave (not blockers for steps 1–4)
 - Corpus location on the host (compose assumes `/srv/corpus`, read-only).
@@ -161,10 +184,13 @@ else in a session:
 4. Run the step's **Gate** (defined in that step's row in BUILD_STATE.md).
    - Gate passes → set status `DONE`.
    - Gate fails → set status `FAILED`.
-5. Update that step's status line in `BUILD_STATE.md`: status, UTC timestamp,
+5. **On `DONE` only: write the step's deploy fragment into `scripts/deploy.sh`.**
+   See "The deploy.sh fragment contract" below. This is not optional bookkeeping —
+   it is the deliverable that decouples deployment from the AI.
+6. Update that step's status line in `BUILD_STATE.md`: status, UTC timestamp,
    log path, and a short summary (<120 chars). Keep the file small — summary
    references what's in the log; do not reproduce it elsewhere.
-6. Commit and push the result on `main` (never a feature branch):
+7. Commit and push the result on `main` (never a feature branch):
    ```
    git add -A          # logs/ and .env are gitignored; never force them in
    git commit -m "Step <NN-name>: <DONE|FAILED|BLOCKED> — <≤60 char summary>"
@@ -175,6 +201,62 @@ else in a session:
      `PROGRESS.md` naming the conflicted file(s); set the step `BLOCKED`; STOP.
      Never resolve a conflict yourself — Dave does that on the laptop.
    Never `git push --force`. Never commit `logs/` or `.env`.
+
+### The deploy.sh fragment contract
+
+**Why this exists.** The build steps are executed once, by an agent, with a human
+watching. Deployment must be repeatable forever, by a human, with no agent. As you
+execute a step you are the only party that knows the *exact* command sequence that
+actually worked — including the corrections you made after a failure. That
+knowledge has to land in `scripts/deploy.sh` while you still have it, or it is
+lost. `deploy.sh` is therefore not written up-front; it **accretes**, one verified
+fragment per completed step, and it is the real output of the build.
+
+**The two jobs deploy.sh must do, which is why fragments carry guards:**
+- **Bare-metal reproduction** — on a machine with nothing (no `.venv`, no models,
+  no units), `scripts/deploy.sh --fresh` must build the entire system.
+- **Code-release deploy** — on a working machine, `scripts/deploy.sh` must activate
+  new code and **not** touch `.venv` or re-download models unless the update
+  genuinely requires it.
+
+Both are satisfied by the same file because every fragment is individually
+idempotent: it checks whether its work is already done and skips if so.
+
+**Fragment format.** Each step owns exactly one marked region in `scripts/deploy.sh`:
+
+```bash
+# >>> deploy-step-NN-stepname >>>
+# <one line: what this does and why it is here>
+if <cheap check that the work is already done> && [ "${FORCE_ALL:-0}" != 1 ]; then
+    info "step NN: already satisfied, skipping"
+else
+    <the exact commands that worked, in order>
+fi
+# <<< deploy-step-NN-stepname <<<
+```
+
+Rules, all of them load-bearing:
+- **Guard every fragment.** The check must be cheap and honest (`[ -d .venv ]` is
+  weak; `.venv/bin/python -c 'import torch'` is real). `--fresh` sets `FORCE_ALL=1`
+  so every guard falls through to the work.
+- **Commands only, no diagnostics.** Gate probes, `curl` checks, and exploratory
+  commands stay in the step log. The fragment is what *builds*, not what *verifies*.
+- **Verbatim what worked.** If you had to correct a command after a failure, the
+  fragment gets the corrected form — never the first attempt, never an idealized
+  version you did not run.
+- **Fragments are ordered by NN** and must remain so; `deploy.sh` executing top to
+  bottom is exactly the build order.
+- **Never delete another step's fragment.** You own exactly the region matching the
+  step you just completed.
+- **Safety check before every fragment edit:**
+  `grep -c '^# >>> deploy-step-NN' scripts/deploy.sh`
+  - `1` → replace that region in place.
+  - `0` → append a new region in NN order.
+  - `>1` → **STOP.** Duplicate markers mean a previous write went wrong. Append a
+    `BLOCKED:` entry to `PROGRESS.md` and wait for Dave. Do not guess which to keep.
+- **Re-running a step replaces its fragment**, exactly as it replaces its status
+  line. Never append a second copy.
+- Secrets never go in a fragment. Read them from `.env`, which is gitignored.
 
 ### On FAILED (agent can act; needs Dave's confirm to retry)
 A `FAILED` step is one you ran but whose gate did not pass, and which you can
@@ -239,6 +321,9 @@ cat /tmp/ragfarm.lock
 ### Hard rules
 - Never edit `CLAUDE.md`, the ADRs, or `docs/decisions/*` during build execution.
 - Never put raw build output anywhere except `logs/`.
+- Every step that reaches `DONE` MUST leave a guarded fragment in `scripts/deploy.sh`
+  (see "The deploy.sh fragment contract"). A `DONE` step with no fragment is an
+  incomplete step. Never hand-write a fragment for a step you did not actually run.
 - Never skip a step except for an active `BLOCKED:` or `SKIP` state.
 - Never `git push --force`; never commit `logs/` or `.env`.
 - Never resolve a git conflict yourself — abort and `BLOCKED:` it for Dave.
