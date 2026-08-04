@@ -44,3 +44,7 @@ tests/qwen3-vl_*_prompt-results.json
 # version bump), so the dir must exist in a fresh clone.
 backups/*
 !backups/.keep
+# editor swap files — never commit (a live vim leaves these behind)
+*.swp
+*.swo
+*~

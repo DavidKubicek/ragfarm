@@ -1,21 +1,29 @@
-# /etc/systemd/system/ragfarm-reranker.service  (runs on HOST, needs iGPU)
-# Second llama.cpp server, dedicated to reranking: bge-reranker-v2-m3 as a GGUF on
-# the iGPU via Vulkan (ADR-0008). Same binary as ragfarm-llama, different model and
-# the --reranking endpoint. Replaces the old CPU cross-encoder that ran inside the
-# embedder (~36 s/query on CPU -> ~1.7 s on the iGPU). No ROCm (gfx1150 unofficial);
-# Vulkan, exactly like the LLM.
+# /etc/systemd/system/ragfarm-reranker.service  (runs on HOST, needs the GB10 GPU)
+# llama.cpp server dedicated to reranking: bge-reranker-v2-m3 as a GGUF on CUDA
+# (ADR-0008, ADR-0013 §3). This is the ONLY thing llama.cpp still serves —
+# generation moved to vLLM (manifests/ragfarm-vllm.service) on the Spark.
 #
 # The GGUF is generated (not committed; gitignored) by `scripts/fetch-encoder.sh`
 # from the cached HF weights — see models/reranker/MODEL.md.
 [Unit]
-Description=llama.cpp reranker (bge-reranker-v2-m3, Vulkan/iGPU)
+Description=llama.cpp reranker (bge-reranker-v2-m3, CUDA/GB10)
 After=network-online.target
 
 [Service]
 User=dave
-# RERANK_GGUF_PATH default matches `scripts/fetch-encoder.sh`'s default fetch
-# target; EnvironmentFile is loaded AFTER so a value in .env (written by
-# fetch-encoder.sh when you swap models, or by hand) OVERRIDES this default.
+# ADR-0013 §3: the reranker runs at LOWERED priority so the interactive LLM wins
+# contention. Nice=5 is deliberately mild — we are single-user for now and the
+# point is to observe how much these actually fight before tuning harder.
+#
+# HONEST LIMIT: Nice is CPU scheduling only. It does NOT deprioritise GPU work —
+# kernel ordering on the device is the driver's business, and nothing here yields
+# GPU time to vLLM. What it does buy is the host-side half (HTTP, tokenisation,
+# sampling, the batch marshalling around each rerank call). If real GPU contention
+# shows up, the levers are CUDA MPS priorities or simply not running a bulk rerank
+# concurrently with interactive generation — see docs/deployment.md.
+Nice=5
+# RERANK_MODEL_PATH is written by `scripts/fetch-encoder.sh` into .env, which the
+# EnvironmentFile below loads.
 # CONFIG LIVES IN .env, NOT HERE — this unit carries start/stop/restart POLICY only.
 # The model-path default that used to sit here was stripped 2026-08-03: it pinned a
 # specific checkpoint, which goes stale the moment the model is swapped (it still
@@ -24,7 +32,7 @@ User=dave
 EnvironmentFile=-/home/dave/ragfarm/.env
 WorkingDirectory=/home/dave/llama.cpp
 ExecStart=/home/dave/llama.cpp/build/bin/llama-server \
-  -m ${RERANK_GGUF_PATH} \
+  -m ${RERANK_MODEL_PATH} \
   --reranking --host 127.0.0.1 --port 8081 -ngl 999 --mlock --mmap \
   -b 4096 -ub 4096 \
   --alias bge-reranker-v2-m3

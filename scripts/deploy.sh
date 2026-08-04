@@ -199,7 +199,7 @@ phase_venv() {
 	# fail the GGUF assertions below.
 
 	EMBED_MODEL_PATH="$(read_env_var EMBED_MODEL_PATH)"
-	RERANK_GGUF_PATH="$(read_env_var RERANK_GGUF_PATH)"
+	RERANK_MODEL_PATH="$(read_env_var RERANK_MODEL_PATH)"
 
 	# GATE
 	"$VENV/bin/python" - <<'PY' || die "venv import check failed"
@@ -212,7 +212,7 @@ PY
 	ls "$EMBED_MODEL_PATH"/*.safetensors >/dev/null 2>&1 \
 		|| ls "$EMBED_MODEL_PATH"/pytorch_model*.bin >/dev/null 2>&1 \
 		|| die "no weight file (safetensors/bin) at EMBED_MODEL_PATH ($EMBED_MODEL_PATH)"
-	[ -n "$RERANK_GGUF_PATH" ] && [ -f "$RERANK_GGUF_PATH" ] || die "RERANK_GGUF_PATH missing or unset ($RERANK_GGUF_PATH)"
+	[ -n "$RERANK_MODEL_PATH" ] && [ -f "$RERANK_MODEL_PATH" ] || die "RERANK_MODEL_PATH missing or unset ($RERANK_MODEL_PATH)"
 	# The LLM checkpoint is asserted by the step-02 fragment, not here: it is a
 	# safetensors snapshot DIRECTORY under vLLM, not a single GGUF file.
 	ok "venv ready; deps import; embedder+reranker present"
@@ -266,7 +266,7 @@ PY
 		info "step 03: already satisfied, skipping"
 	else
 		# fetch-encoder.sh is idempotent (present target = no-op) and writes
-		# EMBED_MODEL_PATH / RERANK_GGUF_PATH into .env, which the unit reads.
+		# EMBED_MODEL_PATH / RERANK_MODEL_PATH into .env, which the unit reads.
 		# --no-restart: the unit may not be installed yet on a bare-metal run.
 		VENV_PY="$VENV/bin/python" scripts/fetch-encoder.sh --no-restart
 		install_unit ragfarm-embedder.service

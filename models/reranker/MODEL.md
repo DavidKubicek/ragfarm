@@ -5,7 +5,7 @@
 | Model      | BAAI/bge-reranker-v2-m3 |
 | Revision   | latest (not pinned; fetched by `scripts/fetch-encoder.sh`) |
 | Backend    | llama.cpp `--reranking`, **Vulkan / iGPU** (Radeon 890M, RADV GFX1150), f16 GGUF |
-| Weights    | models/reranker/bge-reranker-v2-m3/bge-reranker-v2-m3-f16.gguf (~1.15 GB, gitignored); path in `.env` `RERANK_GGUF_PATH` |
+| Weights    | models/reranker/bge-reranker-v2-m3/bge-reranker-v2-m3-f16.gguf (~1.15 GB, gitignored); path in `.env` `RERANK_MODEL_PATH` |
 | HF source  | BAAI/bge-reranker-v2-m3 (latest) — downloaded + converted to GGUF by `scripts/fetch-encoder.sh` |
 | Output     | one relevance score per (query, document). llama.cpp returns the **raw logit**; rag-retrieval applies `sigmoid` → [0,1] (identical to FlagReranker `normalize=True`) |
 | Role       | cross-encoder rerank of the fused RRF candidate pool in `search_corpus` |
@@ -28,4 +28,4 @@ scripts/fetch-encoder.sh            # fetches bge-m3 + converts this reranker to
 scripts/fetch-encoder.sh --force    # re-fetch + re-convert
 scripts/fetch-encoder.sh --list     # other embedder+reranker pairs
 ```
-It writes `RERANK_GGUF_PATH` into `.env`, which `ragfarm-reranker.service` reads.
+It writes `RERANK_MODEL_PATH` into `.env`, which `ragfarm-reranker.service` reads.

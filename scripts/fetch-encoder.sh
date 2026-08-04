@@ -5,7 +5,7 @@
 # Downloads the dense+sparse embedder into models/embeddings/<slug>/ (FlagEmbedding
 # loads it in place) and its cross-encoder reranker — converted to an f16 GGUF via
 # llama.cpp's converter — into models/reranker/<slug>/. Writes EMBED_MODEL_PATH and
-# RERANK_GGUF_PATH into .env, which ragfarm-embedder / ragfarm-reranker read on next
+# RERANK_MODEL_PATH into .env, which ragfarm-embedder / ragfarm-reranker read on next
 # start — no unit edits, no code changes.
 #
 # WHY ONE SCRIPT FOR BOTH: the embedder and reranker must be a COMPATIBLE pair (same
@@ -112,10 +112,10 @@ else
 		|| die "reranker GGUF conversion failed"
 	RERANK_FETCHED=1
 fi
-env_upsert "$ENV_FILE" RERANK_GGUF_PATH "$REPO_ROOT/$RERANK_GGUF"
+env_upsert "$ENV_FILE" RERANK_MODEL_PATH "$REPO_ROOT/$RERANK_GGUF"
 
 ok "EMBED_MODEL_PATH=$REPO_ROOT/$EMBED_DIR"
-ok "RERANK_GGUF_PATH=$REPO_ROOT/$RERANK_GGUF   ($ENV_FILE)"
+ok "RERANK_MODEL_PATH=$REPO_ROOT/$RERANK_GGUF   ($ENV_FILE)"
 if [ "${EMBED_FETCHED:-0}" = 1 ]; then
 	warn "the EMBEDDER changed — the corpus MUST be re-embedded or hybrid retrieval breaks"
 	restart_units ragfarm-embedder ragfarm-reranker

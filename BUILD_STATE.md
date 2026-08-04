@@ -78,13 +78,15 @@ grep -q '^CORPUS_PATH=' .env || echo 'CORPUS_PATH=/data/corpus' >> .env
 ```
 Confirm `corpus` points where Dave actually put it — **ask him if unsure**, do not
 guess. `scripts/fetch-encoder.sh` (step 03) appends `EMBED_MODEL_PATH` and
-`RERANK_GGUF_PATH` itself via `env_upsert`, which creates the file if absent, so
+`RERANK_MODEL_PATH` itself via `env_upsert`, which creates the file if absent, so
 the model paths are self-healing from there.
 
-> Naming note for the scripts rework: `fetch-encoder.sh` writes the **legacy**
-> `RERANK_GGUF_PATH`, and `ragfarm-reranker.service` reads that same legacy name —
-> internally consistent, so **do not rename one without the other**. Both should
-> move to `RERANK_MODEL_PATH` together as part of the vLLM lifecycle rework.
+> Naming note — **DONE 2026-08-04.** `RERANK_GGUF_PATH` → `RERANK_MODEL_PATH` was
+> renamed as one patchset across `fetch-encoder.sh` (writer),
+> `manifests/ragfarm-reranker.service` (reader), `scripts/deploy.sh`, `.env`,
+> `.env.example` and `models/reranker/MODEL.md`. `ragfarm_env.py` already had
+> `RERANK_MODEL_PATH` canonical and still honours the legacy spelling, so
+> `deprecations()` now reports clean.
 
 **Why a full rebuild here.** This step deliberately **deletes** any existing
 `.venv`. It is not merely hygiene: the old box was **x86_64** and the Spark is

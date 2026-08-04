@@ -1,9 +1,16 @@
 # Deployment & prod re-deployment notes
 Author: David Kubicek (david.kubicek@eywo.cz)
 
-Operational facts captured during the PoC build (steps 02–07). ADR-0001/0003
-hold the *why*; this holds the concrete *what* needed to redeploy — especially the
-things that must change when the PoC AMD MiniPC is replaced by prod NVIDIA HW.
+Operational facts needed to run and redeploy the system. **ADR-0013/0003 hold the
+*why*; this holds the concrete *what*.**
+
+> **Hardware note.** This system now runs on an **NVIDIA DGX Spark (GB10, sm_121,
+> 128 GB unified memory)**. It was prototyped on an AMD Ryzen MiniPC (iGPU +
+> Vulkan + GGUF), and that migration is complete — ADR-0013 supersedes ADR-0001.
+> AMD-specific mechanics have been removed from this document; what is deliberately
+> kept is (a) **model-behaviour knowledge**, which is hardware-independent and was
+> expensive to learn, and (b) the **AMD baseline performance table**, retained as
+> the before/after comparison. Both are marked where they appear.
 
 ## Runtime topology — live component registry
 
@@ -18,9 +25,9 @@ open-webui.
 
 | plane | component | directory | compose service / container | bind | mcpo mount | agent-facing surface | mutates |
 |-------|-----------|-----------|------------------------------|------|-----------|----------------------|---------|
-| host | llama | built at `~/llama.cpp` | — (systemd `ragfarm-llama`) | `127.0.0.1:8080` | — | OpenAI base URL (swappable) | no |
-| host | embedder | `services/embedder` | — (systemd `ragfarm-embedder`) | `127.0.0.1:8090` `/embed` | — | internal — dense+sparse embed | no |
-| host | reranker | (built at `~/llama.cpp`) | — (systemd `ragfarm-reranker`) | `127.0.0.1:8081` `/reranking` | — | internal — bge-reranker-v2-m3 GGUF, **iGPU/Vulkan** (ADR-0008) | no |
+| host | vllm | `.venv-vllm` | — (systemd `ragfarm-vllm`) | `127.0.0.1:8080` | — | OpenAI base URL (swappable) | no |
+| host | embedder | `services/embedder` | — (systemd `ragfarm-embedder`) | `127.0.0.1:8090` `/embed` | — | internal — dense+sparse embed, **CUDA** | no |
+| host | reranker | (built at `~/llama.cpp`) | — (systemd `ragfarm-reranker`) | `127.0.0.1:8081` `/reranking` | — | internal — bge-reranker-v2-m3 GGUF, **CUDA** (ADR-0008) | no |
 | host | ingester (+ watcher) | `services/ingester` | — (systemd `ragfarm-ingester-watcher`) | — | — | batch + autonomous incremental sync (ADR-0006) | writes Qdrant |
 | container | qdrant | upstream image | `qdrant` / `infra-qdrant` | `127.0.0.1:6333/6334` | — | retrieval store; volume `qdrant_data` | no |
 | container | rag | `services/rag-retrieval` | `rag-retrieval` / `infra-rag-retrieval` | `127.0.0.1:8104` | `/rag` | **tool server** — `search_corpus` | no |
@@ -32,11 +39,22 @@ open-webui.
 
 `ragfarm-stack.service` launches the container plane **except `mcp-fs`** (unbridged)
 and **except the ingester** (a host job / the watcher unit, not the stack): qdrant,
-rag-retrieval, mcp-placement, mcp-host-control, mcpo, open-webui. The reranker is a
-**second host `llama-server`** on the iGPU (`:8081 --reranking`, ADR-0008) — a
-Vulkan sibling of the LLM, not an embedder endpoint; the embedder is embeddings-only.
-So there are **two `llama-server` processes**: the LLM (`:8080`) and the reranker
-(`:8081`), both on the iGPU.
+rag-retrieval, mcp-placement, mcp-host-control, mcpo, open-webui.
+
+**Three processes share the one GPU and the one memory pipe** — there is no separate
+VRAM on GB10 (ADR-0013 §5). Measured while idle-but-loaded:
+
+| process | GPU memory |
+|---|---|
+| vLLM (`:8080`, `LLM_GPU_MEM_UTIL=0.50`) | ~59.5 GB |
+| embedder BGE-M3 (`:8090`) | ~1.6 GB |
+| reranker llama.cpp (`:8081`) | ~0.9 GB |
+| **total** | **~62 GB of 121 GB** |
+
+`llama-server` now runs **once**, for the reranker only (`:8081 --reranking`,
+ADR-0008/0013 §3) — generation moved to vLLM. The embedder is embeddings-only.
+Argue any "let's also run X" against the table above, not against a spare-capacity
+assumption.
 
 ### Why host networking (load-bearing PoC fact)
 The LLM (`:8080`) and embedder (`:8090`) are host processes bound to **127.0.0.1
@@ -59,22 +77,32 @@ the `--revision` flags to reproduce it exactly; omit them for latest. These pins
 **reproducibility only** — not a security constraint (the old no-pickle rule is retired,
 see the model-format note in `scripts/lib-models.sh`).
 
-| role | model | tested revision | reproduce with |
+| role | model | deployed revision | reproduce with |
 |------|-------|-----------------|----------------|
-| LLM | Qwen2.5-7B-Instruct Q4_K_M GGUF (`Qwen/Qwen2.5-7B-Instruct-GGUF`) | GGUF, current | `scripts/fetch-llm.sh` |
-| embedder | `BAAI/bge-m3` | `50f9396f75618b3389c1fd1068a1ff58dc7b5b26` (has `model.safetensors`; HEAD ships only `pytorch_model.bin`) | `scripts/fetch-encoder.sh --embed-revision 50f9396f75618b3389c1fd1068a1ff58dc7b5b26` |
-| reranker | `BAAI/bge-reranker-v2-m3` | `953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e` | `scripts/fetch-encoder.sh --rerank-revision 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e` |
+| LLM | `ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4` (NVFP4 safetensors, 17.9 GiB, vision) | `3c6162d5513d26f008628eebe9b4355559b4a305` | step-02 fragment in `scripts/deploy.sh` (`snapshot_download`) |
+| embedder | `BAAI/bge-m3` | `5617a9f61b028005a4858fdac845db406aefb181` (latest; this repo ships **only** `pytorch_model.bin` — it has no `model.safetensors`) | `scripts/fetch-encoder.sh` |
+| reranker | `BAAI/bge-reranker-v2-m3` | latest, converted to f16 GGUF locally | `scripts/fetch-encoder.sh` |
 
-The embedder + reranker must stay a **compatible pair** (`fetch-encoder.sh --list`); the
-currently-deployed embedder is the safetensors revision above (same weights as latest,
-faster load). Per-model detail lives in `models/{llm,embeddings,reranker}/MODEL.md`.
+Served LLM alias is **`qwen3-vl-30b-a3b`** and it is **load-bearing**:
+`infra/openwebui/setup_openwebui.py` keys `MODEL_TUNING` by the alias advertised on
+`/v1/models`, so serving under another name makes the `ragfarm-vision` preset
+silently fail to bind.
+
+The embedder + reranker must stay a **compatible pair** (`fetch-encoder.sh --list`).
+Per-model detail lives in `models/{llm,embeddings,reranker}/MODEL.md` — including the
+measured NVFP4 MoE backend findings, which contradict parts of ADR-0013 and are worth
+reading before touching the serving flags.
+
+> **Older baseline, for reference only:** the PoC ran Qwen2.5-7B-Instruct Q4_K_M GGUF
+> with bge-m3 at `50f9396f…`. Neither is deployed now; GGUF is the retired llama.cpp
+> generation path.
 
 ## Autostart & lifecycle
 
 ### What starts on boot
-- **Host services** (systemd, already `enabled`): `ragfarm-llama.service` (LLM),
-  `ragfarm-reranker.service` (iGPU cross-encoder, ADR-0008),
-  `ragfarm-embedder.service` (CPU embeddings),
+- **Host services** (systemd, already `enabled`): `ragfarm-vllm.service` (LLM, CUDA),
+  `ragfarm-reranker.service` (CUDA cross-encoder, ADR-0008; `Nice=5`),
+  `ragfarm-embedder.service` (CUDA embeddings),
   `ragfarm-ingester-watcher.service` (autonomous corpus sync, ADR-0006).
 - **Container stack**: `ragfarm-stack.service` runs `docker compose up -d` for the
   six container services (see the topology note above), then its `ExecStartPost`
@@ -99,17 +127,17 @@ need to bring one piece up or down on its own.
 
 Cold start — host model hosts first, then the container stack:
 ```bash
-sudo systemctl start ragfarm-llama ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher
+sudo systemctl start ragfarm-vllm ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher
 sudo systemctl start ragfarm-stack
 ```
 Stop everything — stack first, then host services:
 ```bash
 sudo systemctl stop ragfarm-stack
-sudo systemctl stop ragfarm-ingester-watcher ragfarm-embedder ragfarm-reranker ragfarm-llama
+sudo systemctl stop ragfarm-ingester-watcher ragfarm-embedder ragfarm-reranker ragfarm-vllm
 ```
 Status at a glance:
 ```bash
-systemctl --no-pager status ragfarm-llama ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher ragfarm-stack
+systemctl --no-pager status ragfarm-vllm ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher ragfarm-stack
 docker compose -f infra/compose.yaml ps
 ```
 
@@ -118,12 +146,45 @@ docker compose -f infra/compose.yaml ps
   follow with `scripts/mcpo-heal.sh` (or just `sudo systemctl restart ragfarm-stack`),
   otherwise tools come up unmounted (ADR-0007 note #4; the boot healer is the stack
   unit's `ExecStartPost`).
-- **reranker & embedder**: independent host services now (a GPU `llama-server` on
-  `:8081` and the CPU embedder on `:8090`); restarting one doesn't touch the other.
-  The reranker loads its ~1.2 GB GGUF on the iGPU in ~1–2 s; rag-retrieval reaches it
-  via `RERANK_ENDPOINT` (`:8081/reranking`). One gotcha: llama.cpp reranking scores
-  each `(query,doc)` pair in one physical batch, so the unit sets `-b/-ub 4096` — if
-  chunks ever grow past that, raise it (see `ragfarm-reranker.service`).
+- **reranker & embedder**: independent host services (a CUDA `llama-server` on `:8081`
+  and the CUDA embedder on `:8090`); restarting one doesn't touch the other. The
+  reranker loads its ~1.1 GB GGUF in ~1–2 s; rag-retrieval reaches it via
+  `RERANK_ENDPOINT` (`:8081/reranking`). One gotcha: llama.cpp reranking scores each
+  `(query,doc)` pair in one physical batch, so the unit sets `-b/-ub 4096` — if chunks
+  ever grow past that, raise it (see `ragfarm-reranker.service`).
+- **vLLM cold start is slow, and that is not a hang.** First start after a cache miss
+  JIT-compiles FlashInfer kernels: measured **813 s cold vs ~3 min warm**. Two things
+  make this survivable and both live in `.env`:
+  `MAX_JOBS` (caps parallel CUDA compiles — unset it defaults to `nproc+2` and the
+  OOM killer takes the service at ~98 GB) and `LLM_GPU_MEM_UTIL` (steady-state
+  weights+KV budget). See `.env.example` and ADR-0013 §5a — they are *different*
+  budgets, and lowering the vLLM memory flags does nothing for the cold-start peak.
+  The unit has `StartLimitBurst=3`, so a genuinely broken config goes `failed`
+  instead of crash-looping while `systemctl is-active` says `activating`.
+
+### GPU contention & the reranker's priority (tunable — revisit with real load)
+
+`ragfarm-reranker.service` runs at **`Nice=5`**, a deliberately mild de-prioritisation
+so the interactive LLM wins contention (ADR-0013 §3). It is set low on purpose: we are
+**single-user today**, and the point is to observe how much these three actually fight
+over the GPU before tuning harder.
+
+**Know what `Nice` does and does not buy.** It is CPU scheduling only — it does *not*
+yield GPU time. Kernel ordering on the device is the driver's business, and nothing in
+the unit deprioritises the reranker's CUDA work. What it does help with is the
+host-side half: HTTP handling, tokenisation, and the batch marshalling around each
+rerank call.
+
+To tune (any of these, no code changes):
+- raise/lower `Nice=` in `manifests/ragfarm-reranker.service`, reinstall, restart;
+- if *GPU* contention is the real problem, the levers are CUDA MPS priorities, or
+  simply not running a bulk re-rank concurrently with interactive generation;
+- if the reranker is starving the LLM of memory rather than compute, lower
+  `LLM_GPU_MEM_UTIL` and re-check the topology table above.
+
+Measure before tuning: a rerank turn was ~1.9 s on the old iGPU and the model is
+unchanged, so if it regresses noticeably under concurrent load, that is the signal —
+not a number anyone should guess at up front.
 - Manual `docker compose` ops need the proxy env first: `source scripts/proxy-env.sh`
   (image pulls + container proxy inheritance).
 
@@ -154,6 +215,14 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   `HTTP(S)_PROXY`/`NO_PROXY` (guarantees loopback + containers bypass the proxy).
 
 **Model management (fetch / hot-swap)**
+
+> **`fetch-llm.sh` and `activate-llm.sh` are RETIRED for generation (ADR-0013).**
+> They are GGUF/`--mmproj`/llama.cpp-shaped, the Spark serves NVFP4 safetensors on
+> vLLM, and `deploy.sh` no longer calls them. Kept below because the *mechanics* are
+> still accurate for llama.cpp and no vLLM-shaped replacement exists yet. To change
+> the served LLM today: edit `LLM_MODEL_PATH`/`LLM_SERVED_NAME` in `.env` and restart
+> `ragfarm-vllm`. `fetch-encoder.sh` is NOT retired — it still fetches the
+> embedder+reranker pair and is called by `deploy.sh`.
 - `fetch-llm.sh` — fetch/swap the generative LLM GGUF into `models/llm/<slug>/` and
   write `LLM_GGUF_PATH` to `.env` (the unit reads it). `--list` shows known-good
   tool-calling LLMs; `--repo`/`--file` swap; `--force` re-fetch. Restart `ragfarm-llama`.
@@ -178,11 +247,11 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
   ```bash
   scripts/activate-llm.sh --list                       # what's on disk
   scripts/activate-llm.sh --dir qwen2.5-32b-instruct-gguf   # switch to it
-  sudo systemctl restart ragfarm-llama                  # apply
+  sudo systemctl restart ragfarm-llama                  # RETIRED: unit no longer exists
   ```
 - `fetch-encoder.sh` — fetch/swap the **matched** embedder+reranker pair into
   `models/embeddings/<slug>/` and `models/reranker/<slug>/` (converts the reranker to
-  GGUF), writing `EMBED_MODEL_PATH` + `RERANK_GGUF_PATH` to `.env`. `--list` shows
+  GGUF), writing `EMBED_MODEL_PATH` + `RERANK_MODEL_PATH` to `.env`. `--list` shows
   compatible pairs. Restart `ragfarm-embedder ragfarm-reranker`. Both fetch latest,
   auto-pick the fastest weight format, and are the ONE place download logic lives —
   `deploy.sh`'s venv phase calls them (no duplication). `lib-models.sh` is their
@@ -190,12 +259,12 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
 
 **Activating a swapped model** — the fetch/activate scripts only write `.env`; the
 units read it on (re)start. What you must do after a swap depends on which model changed:
-- **LLM** (`fetch-llm.sh` / `activate-llm.sh`) → `sudo systemctl restart ragfarm-llama`.
+- **LLM** → edit `.env` (`LLM_MODEL_PATH`), then `sudo systemctl restart ragfarm-vllm`.
   Nothing else — the LLM doesn't touch embeddings or the corpus. (If the model *alias*
   changed, also re-run `infra/openwebui/setup_openwebui.py` so the OWUI preset points at
-  it.) The unit's `ExecStart` conditionally adds `--mmproj` only when `LLM_GGUF_MMPROJ`
-  is non-empty, so a text-only `.env` (the common case) launches exactly as before —
-  the mmproj knob is a no-op unless you're running a vision model.
+  There is no `--mmproj` step any more: the old llama.cpp unit attached a separate
+  multimodal projector GGUF, whereas the vLLM checkpoint carries vision natively.
+  `LLM_MMPROJ_PATH` / `LLM_GGUF_MMPROJ` are inert on the Spark.
 - **Reranker only** → `sudo systemctl restart ragfarm-reranker`. Query-time only; no re-ingest.
 - **Embedder** (`fetch-encoder.sh`) → the vector space changes, so you MUST re-embed:
   `sudo systemctl restart ragfarm-embedder ragfarm-reranker` **then**
@@ -300,57 +369,68 @@ cluster. Set `ONE_MOCK=0`/`HOST_MOCK=0` (and fill `.env`) at deployment.
   `ragfarm` preset. `__event_call__` modals require an interactive UI session (they
   do not fire on headless/API calls — correct for human confirmation).
 
-## What changes on prod NVIDIA hardware
-Per ADR-0003 the durable layer (Open WebUI, mcpo, MCP servers, `search_corpus`,
-Qdrant) is HW-agnostic and should NOT be re-architected. Concrete changes:
-- **Inference**: replace llama.cpp/Vulkan with a CUDA server (vLLM/TGI/llama.cpp-CUDA).
-  Repoint `OPENAI_API_BASE_URL` only. Keep the OpenAI-compatible contract. This is
-  also the moment to move off the 7B: a ~30B model (e.g. Qwen2.5-32B) is expected to
-  resolve most observed 7B issues — tool-calling discipline (the repeated-reboot miss,
-  ADR-0008/agent.py), verbose rambling answers, and instruction-following — and brings
-  a larger native context. Tensor-parallel across two GPUs buys still-larger context /
-  throughput if needed. Nothing in the durable layer changes (ADR-0003).
-- **Embedder**: BGE-M3 (`/embed`, currently CPU) moves onto the GPU (CUDA); keep the
-  dense+sparse contract on `:8090`. Re-ingest is unnecessary if model+revision are unchanged.
-- **Reranker**: already GPU-accelerated on the iGPU via llama.cpp/Vulkan
-  (`:8081 --reranking`, ADR-0008). On prod it swaps the Vulkan build for a CUDA one (or
-  is served by the same CUDA inference stack); the `/reranking` contract is unchanged.
-  Query-time only — never requires re-ingest.
-- **Networking**: with a single CUDA stack and services able to bind a shared
-  interface, the host-networking workaround can be dropped — move containers back to
-  a compose bridge network and reach inference/embedder via service DNS or
-  `host.docker.internal` (which requires those services to bind beyond loopback).
-  Re-evaluate the `0.0.0.0` exposure + firewalling for the target network.
-- **mcpo config**: `mcp-placement` (`where_is_vm`) and `mcp-host-control` are
-  already mounted in `services/mcp-gateway/mcpo-config.json` and run in MOCK mode.
-  When OpenNebula is reachable (steps 05/06 unblock), set `ONE_MOCK=0`/`HOST_MOCK=0`
-  and fill `ONE_XMLRPC`/`ONE_AUTH` per `services/mcp-placement/.env.example` — no
+## The AMD → Spark migration (DONE) and what is still open
+
+ADR-0003's central claim held up: the durable layer (Open WebUI, mcpo, MCP servers,
+`search_corpus`, Qdrant) is hardware-agnostic and **was not re-architected**. The
+whole engine swap touched the serving plane and almost nothing else. Keep it that way.
+
+**Done, 2026-08-03/04 (build steps 01–04):**
+- **Inference** — llama.cpp/Vulkan/GGUF → **vLLM 0.26.0 serving NVFP4 safetensors**,
+  same OpenAI-compatible contract on `:8080`. The model moved 7B → **30B-A3B MoE**.
+- **Embedder** — BGE-M3 CPU → **CUDA**, same dense+sparse contract on `:8090`. The
+  service now *refuses to start* without CUDA rather than silently falling back.
+- **Reranker** — Vulkan → **CUDA** llama.cpp, `/reranking` contract unchanged. This is
+  the only remaining llama.cpp user. Query-time only — never requires re-ingest.
+- **Corpus** — re-ingested from scratch on the Spark: 5 files → 183 points, dense 1024
+  + sparse, alias `corpus` (ADR-0006).
+
+**Still open:**
+- **Networking**: the `network_mode: host` workaround is still in place and still
+  load-bearing for the same reason as before (host services bind loopback only). It
+  *could* now be revisited, but nothing forces it — treat it as optional cleanup, and
+  re-evaluate the `0.0.0.0` exposure + firewalling for the target network first.
+- **mcpo config**: `mcp-placement` (`where_is_vm`) and `mcp-host-control` are already
+  mounted in `services/mcp-gateway/mcpo-config.json` and run in MOCK mode. When
+  OpenNebula is reachable (steps 05/06 unblock), set `ONE_MOCK=0`/`HOST_MOCK=0` and
+  fill `ONE_XMLRPC`/`ONE_AUTH` per `services/mcp-placement/.env.example` — no
   mcpo-config or registration changes needed.
-- **Corpus**: `CORPUS_PATH` and the Qdrant `corpus` collection (dense 1024 + sparse)
-  are portable; re-run `services/ingester/ingester.py --recreate` against prod corpus.
+- **Did the bigger model fix the 7B problems?** The move to ~30B was expected to
+  resolve tool-calling discipline (the repeated-reboot miss), rambling answers, and
+  instruction-following. **Unverified end-to-end** — tool-calling works at the API
+  level (`get_weather` with parsed args), but the agent-layer behaviour is step 07.
+  Re-test rather than assuming; see the prompt-design notes below, several of which
+  were scaffolding for an 8B and may now be unnecessary.
+- **GGUF-era scripts**: `fetch-llm.sh`, `activate-llm.sh`, `llama-launch.sh` still
+  assume GGUF + `--mmproj` and are **unused for generation**. `deploy.sh` no longer
+  calls them. A vLLM-shaped model-swap equivalent does not exist yet.
+- **`LLAMA_DIR` is half-honoured**: `deploy.sh` and `fetch-encoder.sh` respect it,
+  `ragfarm-reranker.service` and `llama-launch.sh` hardcode `/home/dave/llama.cpp`.
+  Either make the units read it or drop the variable — don't leave it half-and-half.
 
 ## Vision engine (Qwen3-VL family — ADR-0009)
 
-Two OWUI presets coexist; only one is *live* at a time (the one whose
-`base_model_id` matches the wrapper's `--alias`). To flip between text and
-vision, or between Instruct and Thinking variants, use `activate-llm.sh`:
+**There is one model now, and it is the vision model.** `Qwen3-VL-30B-A3B-Instruct`
+is both the general and the vision engine on the Spark — there is no separate text
+model to flip to, and no `--mmproj` to attach: vision is native to the checkpoint and
+vLLM serves it directly (ADR-0009 as amended by ADR-0013).
 
-```bash
-scripts/activate-llm.sh --list                                 # what's on disk
-scripts/activate-llm.sh --dir qwen_qwen3-vl-8b-thinking-gguf   # switch to vision
-sudo systemctl restart ragfarm-llama                            # apply (~30-60 s to reload)
-```
+To change the served model, edit `LLM_MODEL_PATH` / `LLM_SERVED_NAME` in `.env` and
+`sudo systemctl restart ragfarm-vllm`. Keep the alias in step with the `MODEL_TUNING`
+key in `infra/openwebui/setup_openwebui.py` or the preset silently stops binding.
 
-The wrapper (`scripts/llama-launch.sh`) auto-derives `--alias` from the model's
-directory name and conditionally adds `--mmproj` when the model dir contains a
-`*mmproj*.gguf` (vision models). No unit edits, no other flags to touch.
+> The old `activate-llm.sh --dir …` + `--mmproj` flow documented here was the GGUF /
+> llama.cpp mechanism. Those scripts still exist but are **not** used for generation,
+> and there is no vLLM-shaped replacement yet (see "Still open" above).
 
 ### Live capabilities that Just Work
 
 The Qwen3-VL preset has already been verified end-to-end on this stack:
 - **OCR from image URL** — see the demo commands below. Auntie Anne's Indonesian
   receipt from the openlm.ai example was OCR'd correctly (all prices, all
-  fields), at ~8 tok/s decode on the iGPU.
+  fields). Measured at ~8 tok/s decode on the OLD AMD iGPU; the Spark decodes far
+  faster (see the performance tables below), so this is a capability record, not a
+  current timing.
 - **Image description** — attach any image in OWUI chat; the model describes
   content verbatim (RULE 4 of the vision prompt: no invention, verbatim OCR).
 - **Diagram scan → regenerate as mermaid or draw.io** — screenshot a hand-drawn
@@ -380,13 +460,16 @@ fancy stencil sets are missing.
 
 The tests below use the live stack as-is. Nothing to fetch, nothing to install.
 
-**Sanity: vision model loaded?**
+**Sanity: which model is served?**
 ```bash
-curl -s 127.0.0.1:8080/v1/models | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["models"][0]["model"], d["models"][0].get("capabilities"))'
-# expect: qwen_qwen3-vl-8b-thinking ['completion', 'multimodal']
+curl -s 127.0.0.1:8080/v1/models | python3 -c 'import sys,json; print([m["id"] for m in json.load(sys.stdin)["data"]])'
+# expect: ['qwen3-vl-30b-a3b']
 ```
+(vLLM returns the OpenAI `{"data":[...]}` shape. llama.cpp's old `{"models":[...]}`
+with a `capabilities` list is gone — a command reading `d["models"][0]` is pre-Spark.)
 
-**OCR from a public image (via base64 to bypass llama-server's HTTPS-off build):**
+**OCR from a public image.** Sent as base64 rather than a URL — originally to work
+around llama-server's HTTPS-off build, and still the safer habit on an offline box:
 ```bash
 .venv/bin/python - <<'PY'
 import base64, requests, time
@@ -395,7 +478,7 @@ img = requests.get(IMG, timeout=30); img.raise_for_status()
 uri = f"data:{img.headers['content-type']};base64,{base64.b64encode(img.content).decode()}"
 t0 = time.time()
 r = requests.post("http://127.0.0.1:8080/v1/chat/completions", json={
-    "model": "qwen_qwen3-vl-8b-thinking",
+    "model": "qwen3-vl-30b-a3b",
     "messages": [{"role":"user","content":[
         {"type":"image_url","image_url":{"url":uri}},
         {"type":"text","text":"Read all the text in the image."}]}],
@@ -423,6 +506,12 @@ demo without leaning on external URLs.
 
 ### /think vs /no_think (Qwen3 Thinking control)
 
+> **Applicability on the Spark:** the deployed checkpoint is
+> `Qwen3-VL-30B-A3B-**Instruct**`, not a `*-Thinking-*` variant, so there is no
+> reasoning block to suppress and `/no_think` is a no-op for it. Kept because the
+> convention is real, survives a model swap to a Thinking variant, and the
+> demo advice below still applies if one is ever served.
+
 Qwen3 parses these tokens out of user messages (chat-template convention, NOT
 system-prompt rules):
 - **`/think`** — force the model to emit a `<think>...</think>` block before the
@@ -440,6 +529,13 @@ lookups, and diagram requests where the trace adds no value.
 Standalone Python tools (no dependencies beyond `requests`) that answer *where
 did the time go* for any inference or chat turn. All safe to run against the
 live stack — read-only, no side effects.
+
+> **Status: incomplete, rewrite expected.** This is a framework, not a finished
+> tool, and it has no concept of thinking/reasoning models. Some docstrings still
+> quote pre-Spark ports. Treat output as indicative; requirements for the rewrite
+> are in `tests/tracing/README.md`. The `owui_trace_proxy.py` experiment
+> (port 8095) is **retired** — it corrupted the OWUI DB and presets during demo
+> prep. It is still on disk; do not re-plumb it without a plan.
 
 Every tool takes `--url http://127.0.0.1:8080` (or the equivalent flag) so
 they're portable across the swappable llama-server endpoint. Default endpoint
@@ -489,16 +585,41 @@ which every other tool measures anyway.)*
     --rag-endpoint http://127.0.0.1:8000
 ```
 
-### What "good" looks like on this iGPU (Qwen3-VL-8B-Thinking Q4_K_M, current baseline)
+### What "good" looks like — Spark (current) vs AMD iGPU (historical)
+
+**Current: DGX Spark GB10, Qwen3-VL-30B-A3B NVFP4 on vLLM 0.26.0.**
 
 | Metric | Now | Comment |
 |--------|-----|---------|
-| Decode | ~8-9 tok/s | LPDDR5x bandwidth-bound, both 7B and 8B land here |
-| Prefill | ~170 tok/s | The 2-order-of-magnitude speedup vs decode is expected |
-| Vision OCR (dense receipt) | ~40 s | 300+ output tokens at 8 tok/s |
-| Reranker turn | ~1.9 s | Since ADR-0008 moved it to GPU/Vulkan (was ~36 s on CPU) |
-| Tool overhead | ~15-25 % of chat turn | Higher with reboot_guarded modal, lower for pure RAG |
+| Decode | **75.6 tok/s** (`flashinfer_b12x`) / **71.1 tok/s** (`FLASHINFER_CUTLASS`, default) | 256 tok, `ignore_eos`, single stream, 3 runs. ~54% of the ~140 tok/s bandwidth ceiling |
+| Prefill | **UNMEASURED** | Where FP4 should show its biggest win — the gap most worth closing |
+| Vision OCR (dense receipt) | UNMEASURED on Spark | Capability verified on AMD; re-time it here |
+| Reranker turn | UNMEASURED on Spark | Was ~1.9 s on the iGPU; same model, now CUDA |
+| Tool overhead | UNMEASURED on Spark | Was ~15–25% of a chat turn |
+| Cold start (vLLM) | **813 s** | FlashInfer JIT; torch.compile is only 9.5 s of it |
+| Warm start (vLLM) | **~3 min** | Reuses `~/.cache/flashinfer` + `~/.cache/vllm` |
 
-Baseline numbers older docs cite (300 tok/s prefill, 1000 tok/s decode) came
-from a much lighter model; the current live setup is intentionally slower and
-smarter. Track deltas from this table, not from those.
+Most rows are still `UNMEASURED` because step 07 (agent wiring) is where chat-turn
+and tool timings become meaningful. Fill them in from real runs — do not carry the
+AMD numbers across.
+
+**Historical baseline: AMD Ryzen MiniPC iGPU, Qwen3-VL-8B-Thinking Q4_K_M / Vulkan.**
+Kept deliberately as the before/after reference — this is what the hardware
+investment was measured against.
+
+| Metric | AMD iGPU | Comment |
+|--------|----------|---------|
+| Decode | ~8–9 tok/s | LPDDR5x bandwidth-bound; both 7B and 8B landed here |
+| Prefill | ~170 tok/s | The order-of-magnitude gap vs decode is expected |
+| Vision OCR (dense receipt) | ~40 s | 300+ output tokens at 8 tok/s |
+| Reranker turn | ~1.9 s | After ADR-0008 moved it to GPU/Vulkan (was ~36 s on CPU) |
+| Tool overhead | ~15–25 % of chat turn | Higher with the `reboot_guarded` modal, lower for pure RAG |
+
+**Headline so far: decode went ~8.5 → ~71 tok/s, roughly 8×, while the model grew
+from 8B dense to 30B-A3B MoE** — i.e. more capable *and* an order of magnitude
+faster. Note the comparison is not like-for-like (different model, quant and engine);
+it is the honest end-to-end "what the box does for us" delta, which is the number
+that justified the hardware.
+
+Older docs citing 300 tok/s prefill / 1000 tok/s decode refer to a much lighter
+model than either row above — ignore them.
