@@ -1,0 +1,26 @@
+{
+    "active": [
+        0,
+        2
+    ],
+    "downloaded": [
+        {
+            "model": "Qwen3-VL-30B-A3B-Thinking-FP8",
+            "alias": "qwen_qwen3-vl-30b-a3b-thinking-fp8",
+            "description": "ragfarm-vision",
+            "comment": "(Qwen3-VL-30B-A3B-Thinking + infra + draw.io)"
+        },
+        {
+            "model": "Qwen3-VL-30B-A3B-Instruct-NVFP4",
+            "alias": "qwen_qwen3-vl-30b-a3b-instruct-nvfp4",
+            "description": "ragfarm-vision",
+            "comment": "(Qwen3-VL-30B-A3B-Instruct + infra + draw.io)"
+        },
+        {
+            "model": "Qwen3-VL-30B-A3B-Thinking-FP8",
+            "alias": "benasd_qwen3-vl-30b-a3b-thinking-nvfp4",
+            "description": "ragfarm-vision",
+            "comment": "(Qwen3-VL-Thinking NVFP4 + infra + draw.io)"
+        }
+    ]
+}
