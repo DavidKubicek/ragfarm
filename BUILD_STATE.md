@@ -18,7 +18,7 @@ Reference the log file, do not parse it or reproduce it here.
 | 04 | qdrant-ingester     | DONE    | 2026-08-03T12:56Z | logs/04-qdrant-ingester.log    | ALL PASS regression; 5 files -> 183 points, dense1024+sparse; hostname #1 on sparse, cs query on dense |
 | 05 | mcp-placement       | BLOCKED | 2026-06-18T11:30Z | logs/05-mcp-placement.log      | no OpenNebula access in PoC; ON creds+reachability deferred to deployment (ADR-0003) |
 | 06 | mcp-fs-host-control | BLOCKED | 2026-06-18T11:30Z | logs/06-mcp-fs-host-control.log| host-control needs live ON (drain-reboot); deferred to deployment (ADR-0003) |
-| 07 | agent-wiring        | PENDING | 2026-08-03T00:00Z | logs/07-agent-wiring.log       | Open WebUI + mcpo + rag-retrieval over the OpenAI-compatible endpoint |
+| 07 | agent-wiring        | BLOCKED | 2026-08-04T10:40Z | logs/07-agent-wiring.log       | stack up, tools mounted, grounding proven closed-loop in BOTH modes; needs Dave's UI click — OWUI executes tool servers only in a browser session |
 
 > **Steps 05/06 are still `BLOCKED` on OpenNebula.** They were blocked because the
 > PoC box had no cluster access. The Spark is the *production* target, so ON creds

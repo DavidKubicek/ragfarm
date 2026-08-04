@@ -153,3 +153,43 @@ BLOCKED: 02-vllm-serving — 2026-08-03T12:34Z
           in), and flashinfer-python 0.6.14 IS in the resolved set, so the b12x
           native-FP4 target looks reachable. Step 01 remains DONE and intact — no
           package was installed; --dry-run only.
+
+BLOCKED: 07-agent-wiring — 2026-08-04T10:40Z
+  need:   ONE browser click-through by Dave to close the RAG-only gate. Everything
+          is wired and proven up to OWUI's own tool-execution loop, which an API
+          caller structurally cannot trigger.
+  where:  http://127.0.0.1:3000 (or LAN IP:3000), login admin@ragfarm.local,
+          password in repo-root .env key OWUI_PASSWORD (generated, PLEASE ROTATE)
+  detail: In the UI pick model "ragfarm-vision" and send these two prompts:
+            1. "Kolik vCPU a RAM ma VM hsmbvxip001ts?"   (sparse exact-identifier)
+            2. "Jak se prihlasim do EPC? Popis postup."  (czech semantic / dense)
+          PASS = each answer is grounded in corpus content AND the turn shows a
+          search_corpus tool call. Confirm the call really ran with:
+            docker logs infra-rag-retrieval --tail 20 | grep search_corpus
+          which prints one "search_corpus q='...' -> n/40 cands" line per call.
+
+          WHY THIS NEEDS A HUMAN. OWUI resolves the tool and forwards the schema
+          to vLLM correctly (verified in its DEBUG log: tools=[tool_search_corpus_post]
+          with the full parameter schema). The model then emits a correct tool_call.
+          But OWUI executes registered OpenAPI tool servers inside
+          process_chat_response, which is driven by a chat/websocket session; an
+          API request carries chat_id='' and session_id=None, so OWUI streams the
+          tool_call back to the caller instead of executing and looping. That is an
+          OWUI API-vs-UI asymmetry, not a defect in our wiring, and no amount of
+          API-side probing can close it.
+
+          PROVEN ALREADY (logs/07-agent-wiring.log):
+            - mcpo mounts /rag/search_corpus (+ placement 2 ops, host-control 1)
+            - search_corpus via mcpo: hostname -> correct row @0.99; czech query
+              -> correct EPC login chunk
+            - vLLM emits a correct tool_call for OWUI's exact tool schema
+            - closed-loop (tool_call -> mcpo -> feed back) grounded answers in BOTH
+              modes: "VM hsmbvxip001ts ma 8 vCPU a 64 GB RAM", and a correct Czech
+              EPC login procedure with real URLs/hosts from the corpus
+            - OWUI preset ragfarm-vision bound to live alias qwen3-vl-30b-a3b with
+              toolIds [server:0, server:1, reboot_guarded], function_calling=native
+
+          If the UI click passes, flip this to UNBLOCKED and step 07 is DONE (the
+          deploy fragment is the only remaining work). If the UI ALSO fails to
+          execute the tool, that is a real OWUI integration defect and I should
+          look at the direct/client-side tool-server path next.
