@@ -1,26 +1,53 @@
 {
     "active": [
-        0,
-        2
+        1,
+        3
     ],
     "downloaded": [
         {
-            "model": "Qwen3-VL-30B-A3B-Thinking-FP8",
-            "alias": "qwen_qwen3-vl-30b-a3b-thinking-fp8",
-            "description": "ragfarm-vision",
-            "comment": "(Qwen3-VL-30B-A3B-Thinking + infra + draw.io)"
-        },
-        {
             "model": "Qwen3-VL-30B-A3B-Instruct-NVFP4",
-            "alias": "qwen_qwen3-vl-30b-a3b-instruct-nvfp4",
-            "description": "ragfarm-vision",
-            "comment": "(Qwen3-VL-30B-A3B-Instruct + infra + draw.io)"
+            "repo": "ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4",
+            "alias": "qwen3-vl-30b-a3b-instruct-nvfp4",
+            "preset": "ragfarm-vision",
+            "display": "Qwen3-VL 30B-A3B Instruct NVFP4 (MoE)",
+            "profile": "vision-instruct",
+            "comment": "MoE 30B total / ~3B active. Fast (76 tok/s) but weaker at multi-column reasoning."
+        },
+        {
+            "model": "Qwen3-VL-30B-A3B-Thinking-NVFP4",
+            "repo": "Benasd/Qwen3-VL-30B-A3B-Thinking-NVFP4",
+            "alias": "qwen3-vl-30b-a3b-thinking-nvfp4",
+            "preset": "ragfarm-vision",
+            "display": "Qwen3-VL 30B-A3B Thinking NVFP4 (MoE)",
+            "profile": "vision-thinking",
+            "comment": "MoE Thinking, same quant as the Instruct entry - the clean Instruct-vs-Thinking comparison."
         },
         {
             "model": "Qwen3-VL-30B-A3B-Thinking-FP8",
-            "alias": "benasd_qwen3-vl-30b-a3b-thinking-nvfp4",
-            "description": "ragfarm-vision",
-            "comment": "(Qwen3-VL-Thinking NVFP4 + infra + draw.io)"
+            "repo": "Qwen/Qwen3-VL-30B-A3B-Thinking-FP8",
+            "alias": "qwen3-vl-30b-a3b-thinking-fp8",
+            "preset": "ragfarm-vision",
+            "display": "Qwen3-VL 30B-A3B Thinking FP8 (MoE)",
+            "profile": "vision-thinking",
+            "comment": "Official Qwen FP8. Quant-fidelity reference against the NVFP4 build (31 GB on disk)."
+        },
+        {
+            "model": "Qwen3-VL-32B-Thinking-NVFP4",
+            "repo": "Firworks/Qwen3-VL-32B-Thinking-nvfp4",
+            "alias": "qwen3-vl-32b-thinking-nvfp4",
+            "preset": "ragfarm-vision",
+            "display": "Qwen3-VL 32B Thinking NVFP4 (dense)",
+            "profile": "vision-thinking",
+            "comment": "DENSE 32B, same family and quant as the MoE. Expect ~8-15 tok/s: all 32B are active per token."
+        },
+        {
+            "model": "Qwen3-VL-8B-Thinking",
+            "repo": "Qwen/Qwen3-VL-8B-Thinking",
+            "alias": "qwen3-vl-8b-thinking",
+            "preset": "ragfarm-vision",
+            "display": "Qwen3-VL 8B Thinking bf16",
+            "profile": "vision-thinking",
+            "comment": "The old-box quality benchmark, at bf16 rather than its Q4_K_M - an upper bound on what it could do."
         }
     ]
 }
