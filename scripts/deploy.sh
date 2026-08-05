@@ -67,7 +67,23 @@ SYSTEMD_DIR="/etc/systemd/system"
 # in scripts/stack.sh must stay in step — renaming one alone starts a unit that does
 # not exist, or leaves the retired one running. llama.cpp itself STAYS: the
 # cross-encoder reranker still runs on it (ADR-0013 §3).
-HOST_UNITS=(ragfarm-vllm.service ragfarm-reranker.service ragfarm-embedder.service)
+# vLLM units are TEMPLATED (ragfarm-vllm@N.service), one per slot; the slot list
+# comes from models/llm/active.json, so this array is built rather than hardcoded.
+vllm_units() {
+	if [ -r "$REPO_ROOT/models/llm/active.json" ]; then
+		python3 - "$REPO_ROOT/models/llm/active.json" <<'PY'
+import json, sys
+reg = json.load(open(sys.argv[1]))
+for slot, idx in enumerate(reg.get("active", [])):
+    if isinstance(idx, int):
+        print(f"ragfarm-vllm@{slot}.service")
+PY
+	else
+		echo "ragfarm-vllm@0.service"
+	fi
+}
+mapfile -t VLLM_UNITS < <(vllm_units)
+HOST_UNITS=("${VLLM_UNITS[@]}" ragfarm-reranker.service ragfarm-embedder.service)
 STACK_UNIT="ragfarm-stack.service"
 WATCH_UNIT="ragfarm-ingester-watcher.service"
 

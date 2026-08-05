@@ -19,7 +19,25 @@ set -uo pipefail
 # ADR-0013: generation moved llama.cpp -> vLLM in step 02, so ragfarm-vllm replaces
 # the retired ragfarm-llama here and in scripts/deploy.sh — the two lists must stay
 # in step. llama.cpp itself STAYS: ragfarm-reranker still runs on it (ADR-0013 §3).
-HOST_UNITS=(ragfarm-vllm ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher)
+# vLLM units are TEMPLATED, one instance per slot (ragfarm-vllm@N). Which slots
+# exist is decided by models/llm/active.json's `active` array, not by this list —
+# so a second model appears here automatically once activate_llm.py binds it.
+vllm_units() {
+    local reg="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/models/llm/active.json"
+    if [ -r "$reg" ]; then
+        python3 - "$reg" <<'PY'
+import json, sys
+reg = json.load(open(sys.argv[1]))
+for slot, idx in enumerate(reg.get("active", [])):
+    if isinstance(idx, int):
+        print(f"ragfarm-vllm@{slot}")
+PY
+    else
+        echo "ragfarm-vllm@0"
+    fi
+}
+mapfile -t VLLM_UNITS < <(vllm_units)
+HOST_UNITS=("${VLLM_UNITS[@]}" ragfarm-reranker ragfarm-embedder ragfarm-ingester-watcher)
 STACK_UNIT=ragfarm-stack
 COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/compose.yaml"
 

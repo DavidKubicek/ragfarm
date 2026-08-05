@@ -52,7 +52,47 @@ PORT_STRIDE = 2            # slot 0 -> 8080, slot 1 -> 8082 (8081 is the reranke
 
 
 def load() -> dict:
-    return json.loads(REGISTRY.read_text())
+    reg = json.loads(REGISTRY.read_text())
+    validate(reg)
+    return reg
+
+
+def validate(reg: dict) -> None:
+    """Fail loudly on a registry that cannot produce a working deployment.
+
+    These are NOT auto-repaired on purpose. `alias` is what vLLM advertises and
+    what OWUI keys its preset on; `preset` is the OWUI model id; `model` is a
+    directory. A duplicate in any of them is a naming decision only a human
+    should make — silently disambiguating would produce a UI whose entries do not
+    mean what their names say.
+    """
+    dl = reg.get("downloaded", [])
+    problems: list[str] = []
+    for field in ("model", "alias", "preset"):
+        seen: dict[str, int] = {}
+        for i, e in enumerate(dl):
+            v = e.get(field)
+            if not v:
+                problems.append(f"downloaded[{i}] has no '{field}'")
+                continue
+            if v in seen:
+                problems.append(
+                    f"duplicate {field} {v!r}: downloaded[{seen[v]}] ({dl[seen[v]]['model']}) "
+                    f"and downloaded[{i}] ({e['model']})")
+            else:
+                seen[v] = i
+    for slot, idx in enumerate(reg.get("active", [])):
+        if idx is None:
+            continue
+        if not isinstance(idx, int) or idx >= len(dl) or idx < 0:
+            problems.append(f"active[{slot}] = {idx!r} is not a valid downloaded[] index")
+    # the same model in two slots would start two vLLM instances on the same weights
+    live = [i for i in reg.get("active", []) if isinstance(i, int) and 0 <= i < len(dl)]
+    if len(set(live)) != len(live):
+        problems.append(f"active{live} binds the same model to more than one slot")
+    if problems:
+        sys.exit("models/llm/active.json is inconsistent — fix it by hand:\n  "
+                 + "\n  ".join(problems))
 
 
 def save(reg: dict) -> None:

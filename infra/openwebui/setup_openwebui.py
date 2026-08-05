@@ -43,10 +43,12 @@ Config knobs (env). Model settings are NOT here — they are in MODEL_TUNING:
     TEXT_BASE_MODEL_ID     optional PIN; forces this alias instead of autodetect
     VISION_BASE_MODEL_ID   optional PIN; takes precedence over TEXT_BASE_MODEL_ID
 """
+import json
 import os
 import sys
 import pathlib
 import requests
+from pathlib import Path
 
 URL = os.environ.get("OWUI_URL", "http://127.0.0.1:3000").rstrip("/")
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080").rstrip("/")
@@ -167,6 +169,39 @@ MODEL_TUNING = {
             "name": "ragfarm-vision (Qwen3-VL 30B-A3B + infra + draw.io)",
             "description": "Vision engine: Qwen3-VL-30B-A3B NVFP4 on vLLM with image "
                            "input, corpus RAG, placement, reboot, and draw.io rendering.",
+            "prompt": "vision",
+            "params": {
+                "temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                "max_tokens": 16384,
+            },
+            "capabilities": {"vision": True, "file_context": False},
+        },
+    },
+
+    # ---- PROFILES: tuning selected by models/llm/active.json's `profile` ----
+    # The registry owns IDENTITY (model dir, alias, preset id, display name); this
+    # owns TUNING (prompt, sampler, capabilities). Splitting them keeps the ~200-line
+    # prompt bodies out of JSON while letting a newly fetched model inherit a known
+    # -good configuration by naming one word. `models` above stays for aliases that
+    # predate the registry.
+    "profiles": {
+        "vision-thinking": {
+            "prompt": "vision",
+            # Qwen3-VL Thinking forbids greedy decode. These are Qwen's own
+            # recommended Thinking values (the Instruct checkpoint asks for
+            # 0.7/0.8 instead — see models/llm/MODEL.md).
+            "params": {
+                "temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                # A Thinking turn must fit reasoning + tool call + the full table.
+                # Too low and <think> burns the budget before the tool call lands.
+                "max_tokens": 16384,
+            },
+            # file_context OFF: OWUI prepends `<attached_files>...` as TEXT in
+            # ADDITION to routing image bytes through the vision encoder, and that
+            # dual signal put Qwen3-VL Thinking into a metacognitive loop.
+            "capabilities": {"vision": True, "file_context": False},
+        },
+        "vision-instruct": {
             "prompt": "vision",
             "params": {
                 "temperature": 0.6, "top_p": 0.95, "top_k": 20,
@@ -419,6 +454,51 @@ def resolve_preset(alias: str) -> dict:
     }
 
 
+REGISTRY_PATH = Path(__file__).resolve().parent.parent.parent / "models" / "llm" / "active.json"
+
+
+def load_registry() -> dict | None:
+    """models/llm/active.json, or None if this deployment predates it."""
+    try:
+        return json.loads(REGISTRY_PATH.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def registry_presets(reg: dict) -> list[dict]:
+    """One ready-to-POST preset per ACTIVE slot.
+
+    Identity comes from the registry, tuning from MODEL_TUNING['profiles'].
+    Only active[] entries are written: a downloaded-but-unbound model has no
+    endpoint serving it, and a preset pointing at nothing is the trap that made
+    an earlier session's first chat answer ungrounded.
+    """
+    out, dl = [], reg.get("downloaded", [])
+    for slot, idx in enumerate(reg.get("active", [])):
+        if not isinstance(idx, int) or not (0 <= idx < len(dl)):
+            continue
+        e = dl[idx]
+        prof = MODEL_TUNING["profiles"].get(e.get("profile"))
+        if prof is None:
+            print(f"NOTE: slot {slot} model {e['model']} names unknown profile "
+                  f"{e.get('profile')!r} — skipping (add it to MODEL_TUNING['profiles'])")
+            continue
+        params = {**MODEL_TUNING["params_common"], **prof.get("params", {})}
+        params["system"] = PROMPT_BODIES[prof["prompt"]]
+        out.append({
+            "preset_id": e["preset"],
+            "base_model_id": e["alias"],
+            "name": f"{e['preset']} ({e['display']})",
+            "description": e.get("comment") or e["display"],
+            "params": params,
+            "capabilities": {**MODEL_TUNING["caps_common"], **prof.get("capabilities", {})},
+            "default_features": MODEL_TUNING["default_features_common"],
+            "builtin_tools": MODEL_TUNING["builtin_tools_common"],
+            "_slot": slot,
+        })
+    return out
+
+
 def live_aliases() -> list[str]:
     """Aliases the inference server currently advertises on /v1/models.
 
@@ -428,15 +508,38 @@ def live_aliases() -> list[str]:
     which is not fatal: presets are stored config and can be written ahead of the
     model being up.
     """
-    try:
-        r = requests.get(f"{LLAMA_URL}/v1/models", timeout=5)
-        r.raise_for_status()
-        payload = r.json()
-        # OpenAI shape is {"data": [{"id": ...}]}; llama.cpp also emits {"models": [...]}.
-        rows = payload.get("data") or payload.get("models") or []
-        return [m.get("id") or m.get("model") for m in rows if (m.get("id") or m.get("model"))]
-    except Exception:
-        return []
+    found: list[str] = []
+    # Every slot, not just :8080 — with two slots live the second model is served
+    # by its own vLLM process on its own port (vLLM serves ONE base model per
+    # process), so a single-endpoint probe would report it missing.
+    for url in slot_urls():
+        try:
+            r = requests.get(f"{url}/v1/models", timeout=5)
+            r.raise_for_status()
+            payload = r.json()
+            # OpenAI shape is {"data": [{"id": ...}]}; llama.cpp also emits {"models": [...]}.
+            rows = payload.get("data") or payload.get("models") or []
+            found += [m.get("id") or m.get("model") for m in rows
+                      if (m.get("id") or m.get("model"))]
+        except Exception:
+            continue
+    return found
+
+
+def slot_urls() -> list[str]:
+    """Base URLs for every configured slot. Mirrors activate_llm.py's port map
+    (slot N -> 8080 + 2N; 8081 is the reranker). LLAMA_URL stays first so a
+    single-slot deployment behaves exactly as before."""
+    urls = [LLAMA_URL]
+    reg = load_registry()
+    if reg:
+        for slot, idx in enumerate(reg.get("active", [])):
+            if not isinstance(idx, int):
+                continue
+            u = f"http://127.0.0.1:{8080 + 2 * slot}"
+            if u not in urls:
+                urls.append(u)
+    return urls
 
 
 def select_aliases() -> tuple[list[str], str | None]:
@@ -557,12 +660,27 @@ def main() -> None:
     #    preset whose base_model_id matches the live alias is usable right now.
     tool_ids = server_ids + ["reboot_guarded"]
 
-    aliases, active = select_aliases()
-    if not aliases:
-        sys.exit("No presets to write (--only-active with no live/known alias).")
+    # Registry-driven when models/llm/active.json exists: one preset per ACTIVE
+    # slot, identity from the registry and tuning from MODEL_TUNING['profiles'].
+    # Falls back to the legacy alias table for deployments without a registry.
+    reg = load_registry()
+    presets = registry_presets(reg) if reg else []
+    if presets:
+        served = set(live_aliases())
+        for p in presets:
+            slot = p.pop("_slot")
+            mark = "  <- LIVE" if p["base_model_id"] in served else "  (slot not serving yet)"
+            print(f"preset '{p['preset_id']}' <- slot {slot} "
+                  f"alias={p['base_model_id']}{mark}")
+        aliases, active = None, None
+    else:
+        aliases, active = select_aliases()
+        if not aliases:
+            sys.exit("No presets to write (--only-active with no live/known alias).")
+        presets = [resolve_preset(a) for a in aliases]
 
-    for alias in aliases:
-        p = resolve_preset(alias)
+    for p in presets:
+        alias = p["base_model_id"]
         body = {
             "id": p["preset_id"],
             "base_model_id": p["base_model_id"],
@@ -584,10 +702,10 @@ def main() -> None:
         if r.status_code != 200:
             r = requests.post(URL + "/api/v1/models/model/update", headers=H, json=body, timeout=30)
         r.raise_for_status()
-        mark = "  <- LIVE" if alias == active else ""
+        mark = "  <- LIVE" if (active and alias == active) else ""
         print(f"preset '{p['preset_id']}' ready (alias={alias}, tools={tool_ids}){mark}")
 
-    if active is None:
+    if aliases is not None and active is None:
         print("WARNING: no preset matches a served model — check the alias the "
               "inference server advertises against MODEL_TUNING['models'] keys.")
 

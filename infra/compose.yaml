@@ -181,8 +181,14 @@ services:
       <<: *proxy_env
       HOST: ${OWUI_HOST:-0.0.0.0}    # 0.0.0.0 = reachable remotely (auth-gated); set 127.0.0.1 for loopback-only
       PORT: "3000"
-      OPENAI_API_BASE_URL: http://127.0.0.1:8080/v1
-      OPENAI_API_KEY: sk-no-auth-local    # llama-server ignores auth; placeholder keeps OWUI happy
+      # One entry PER vLLM SLOT, semicolon-separated. vLLM serves ONE base model
+      # per process, so two resident models means two endpoints — and both must be
+      # registered here or the second model never appears in the UI's model list,
+      # which is what makes mid-chat model switching (same conversation, different
+      # model) possible. Slot N -> 8080 + 2N; 8081 is the reranker.
+      # Managed alongside models/llm/active.json — see scripts/activate_llm.py.
+      OPENAI_API_BASE_URLS: ${OWUI_OPENAI_BASE_URLS:-http://127.0.0.1:8080/v1;http://127.0.0.1:8082/v1}
+      OPENAI_API_KEYS: ${OWUI_OPENAI_KEYS:-sk-no-auth-local;sk-no-auth-local}    # vLLM ignores auth; placeholders keep OWUI happy
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
       # Prompt-round timeout ceilings. OWUI's built-in default for AIOHTTP_CLIENT_TIMEOUT
