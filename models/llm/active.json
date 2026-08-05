@@ -11,7 +11,8 @@
             "preset": "ragfarm-vision-instruct",
             "display": "Qwen3-VL 30B-A3B Instruct NVFP4 (MoE)",
             "profile": "vision-instruct",
-            "comment": "MoE 30B total / ~3B active. Fast (76 tok/s) but weaker at multi-column reasoning."
+            "comment": "MoE 30B total / ~3B active. Fast (76 tok/s) but weaker at multi-column reasoning.",
+            "size_gib": 17.9
         },
         {
             "model": "Qwen3-VL-30B-A3B-Thinking-NVFP4",
@@ -20,7 +21,8 @@
             "preset": "ragfarm-vision",
             "display": "Qwen3-VL 30B-A3B Thinking NVFP4 (MoE)",
             "profile": "vision-thinking",
-            "comment": "MoE Thinking, same quant as the Instruct entry - the clean Instruct-vs-Thinking comparison."
+            "comment": "MoE Thinking, same quant as the Instruct entry - the clean Instruct-vs-Thinking comparison.",
+            "size_gib": 17.9
         },
         {
             "model": "Qwen3-VL-30B-A3B-Thinking-FP8",
@@ -29,7 +31,8 @@
             "preset": "ragfarm-vision-fp8",
             "display": "Qwen3-VL 30B-A3B Thinking FP8 (MoE)",
             "profile": "vision-thinking",
-            "comment": "Official Qwen FP8. Quant-fidelity reference against the NVFP4 build (31 GB on disk)."
+            "comment": "Official Qwen FP8. Quant-fidelity reference against the NVFP4 build (31 GB on disk).",
+            "size_gib": 30.1
         },
         {
             "model": "Qwen3-VL-32B-Thinking-NVFP4",
@@ -38,7 +41,8 @@
             "preset": "ragfarm-vision-dense",
             "display": "Qwen3-VL 32B Thinking NVFP4 (dense)",
             "profile": "vision-thinking",
-            "comment": "DENSE 32B, same family and quant as the MoE. Expect ~8-15 tok/s: all 32B are active per token."
+            "comment": "DENSE 32B, same family and quant as the MoE. Expect ~8-15 tok/s: all 32B are active per token.",
+            "size_gib": 20.4
         },
         {
             "model": "Qwen3-VL-8B-Thinking",
@@ -47,7 +51,8 @@
             "preset": "ragfarm-vision-8b",
             "display": "Qwen3-VL 8B Thinking bf16",
             "profile": "vision-thinking",
-            "comment": "The old-box quality benchmark, at bf16 rather than its Q4_K_M - an upper bound on what it could do."
+            "comment": "The old-box quality benchmark, at bf16 rather than its Q4_K_M - an upper bound on what it could do.",
+            "size_gib": 16.3
         }
     ]
 }

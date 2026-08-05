@@ -648,3 +648,30 @@ that justified the hardware.
 
 Older docs citing 300 tok/s prefill / 1000 tok/s decode refer to a much lighter
 model than either row above — ignore them.
+
+### Slots — two models resident, switchable mid-chat
+
+Measured 2026-08-05 with both slots live:
+
+| slot | unit | port | model | util | GPU |
+|---|---|---|---|---|---|
+| 0 | `ragfarm-vllm@0` | 8080 | Qwen3-VL-30B-A3B-Thinking NVFP4 (MoE) | 0.270 | 30.1 GB |
+| 1 | `ragfarm-vllm@1` | 8082 | Qwen3-VL-32B-Thinking NVFP4 (dense) | 0.291 | 35.4 GB |
+
+Plus embedder 1.6 GB and reranker 0.9 GB: **~68 GB of 121 GB**, ~33 GB free.
+The derived budget predicted 0.561 and the box landed on it.
+
+The formula is `(weights + 12 GiB KV + 3 GiB overhead) / 121.7`, and vLLM's own
+startup report confirms it is sound — slot 0 was granted 32.86 GiB and used
+18.22 weights + ~5 overhead + **9.91 KV**, i.e. the 12 GiB KV allowance is
+slightly generous, which is the right direction to be wrong in.
+
+**Open WebUI needs the endpoints registered through its API, not just compose.**
+OWUI seeds `OPENAI_API_BASE_URLS` from the environment on FIRST start only and
+then persists it in its own DB. Changing compose on an existing deployment leaves
+it on one endpoint and the second model silently never appears in the model list.
+`setup_openwebui.py` now POSTs `/openai/config/update` with every slot URL, so a
+re-run fixes it; that is also why the script must be re-run after adding a slot.
+
+Cold start on a new checkpoint (JIT cache partially missing): slot 0 took ~3.5
+min, slot 1 ~7 min. Warm restarts are far quicker.

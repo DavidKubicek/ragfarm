@@ -638,6 +638,23 @@ def main() -> None:
     r = requests.post(URL + "/api/v1/configs/tool_servers", headers=H,
                       json={"TOOL_SERVER_CONNECTIONS": conns}, timeout=30)
     r.raise_for_status()
+
+    # 1b. Point OWUI at EVERY vLLM slot.
+    #     This must go through the API, not compose env: OWUI seeds
+    #     OPENAI_API_BASE_URLS from the environment on FIRST start only and then
+    #     persists it in its own DB, so a compose change alone leaves an existing
+    #     deployment on one endpoint — the second model silently never appears in
+    #     the model list, which is exactly what breaks mid-chat model switching.
+    urls = [f"{u}/v1" for u in slot_urls()]
+    if len(urls) > 1:
+        r = requests.post(URL + "/openai/config/update", headers=H, timeout=30, json={
+            "ENABLE_OPENAI_API": True,
+            "OPENAI_API_BASE_URLS": urls,
+            "OPENAI_API_KEYS": ["sk-no-auth-local"] * len(urls),
+            "OPENAI_API_CONFIGS": {},
+        })
+        r.raise_for_status()
+        print(f"OpenAI endpoints registered: {urls}")
     server_ids = [f"server:{i}" for i in range(len(conns))]  # order-defined
     print(f"tool servers registered: {[c['url'] for c in conns]} -> {server_ids}")
 

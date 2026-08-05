@@ -253,20 +253,24 @@ phase_host_services() {
 			"$VLLM_VENV/bin/pip" install -q --upgrade pip setuptools wheel
 			"$VLLM_VENV/bin/pip" install -q -U 'vllm>=0.22.0'
 		fi
-		# NVFP4 safetensors snapshot (~17.9 GiB). Fetched with the PROJECT venv's
-		# huggingface_hub; idempotent — an already-complete snapshot re-verifies fast.
-		info "ensuring NVFP4 checkpoint present"
-		"$VENV/bin/python" - <<'PY'
-from huggingface_hub import snapshot_download
-p = snapshot_download(
-    "ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4",
-    local_dir="models/llm/Qwen3-VL-30B-A3B-Instruct-NVFP4",
-)
-print("  snapshot:", p)
-PY
-		install_unit ragfarm-vllm.service
+		# Checkpoints come from the REGISTRY (models/llm/active.json, ADR-0013 §2a),
+		# so the repo ships pre-configured with the set to pull and this fragment
+		# does not name a model. --sync is idempotent, byte-verifies against the Hub,
+		# and deletes nothing without --yes. Downloads via curl with stall detection:
+		# huggingface_hub hangs forever on a transfer that dies mid-flight here.
+		info "syncing model registry (models/llm/active.json)"
+		"$VENV/bin/python" scripts/fetch_llm.py --sync
+
+		# One templated unit instance per slot; which slots exist is decided by
+		# active[] in the registry, so this loop follows the registry rather than a
+		# hardcoded list. activate_llm.py already wrote each .env.slotN.
+		install_unit "ragfarm-vllm@.service"
 		sudo systemctl daemon-reload
-		sudo systemctl enable --now ragfarm-vllm.service
+		local u
+		for u in "${VLLM_UNITS[@]}"; do
+			[ -f "$REPO_ROOT/.env.slot${u#ragfarm-vllm@}" ] 2>/dev/null || true
+			sudo systemctl enable --now "$u"
+		done
 		# Cold start is SLOW and that is expected, not a hang: FlashInfer JIT-compiles
 		# its kernels on first run (measured 813 s end-to-end, of which torch.compile
 		# was only 9.5 s). Warm starts reuse ~/.cache/flashinfer + ~/.cache/vllm.
