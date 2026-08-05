@@ -276,12 +276,23 @@ source scripts/proxy-env.sh   # load .env proxy vars (no-op if unset); pip + HF 
 .venv/bin/pip install -U 'vllm>=0.22.0'
 .venv/bin/python -c "import vllm; print('vllm', vllm.__version__)"
 
-# 2. fetch the NVFP4 checkpoint (safetensors; latest revision, fastest format)
-.venv/bin/python - <<'PY'
-from huggingface_hub import snapshot_download
-p = snapshot_download("ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4")
-print("snapshot:", p)
-PY
+# 2. fetch the checkpoints. SUPERSEDED 2026-08-05 by the model registry
+#    (ADR-0013 §2a): models/llm/active.json lists every model this deployment
+#    should hold, so the fetch is registry-driven and the repo ships
+#    pre-configured with the set to pull. --sync downloads whatever is missing and
+#    byte-verifies it against the Hub; it does NOT delete anything without --yes.
+scripts/fetch_llm.py --sync
+scripts/fetch_llm.py --verify        # every model: missing 0, mismatch 0
+
+#    To add one outside the registry: scripts/fetch_llm.py -m <hf-repo>
+#    (The old inline snapshot_download is retired — huggingface_hub hangs
+#    indefinitely on this network when a transfer dies mid-flight; fetch_llm.py
+#    uses curl with stall detection and resume. See ADR-0013 §2a.)
+
+# 2b. bind a model to a slot. vLLM serves ONE base model per process, so each slot
+#     is its own instance: ragfarm-vllm@N on port 8080+2N (8081 is the reranker).
+scripts/activate_llm.py -s 0 -a qwen3-vl-30b-a3b-thinking-nvfp4
+scripts/activate_llm.py --status     # slots, ports, and the per-slot GPU budget
 
 # 3. serve. Try flashinfer (native FP4) FIRST; fall back to marlin only if it
 #    fails, and record which one you ended up on.

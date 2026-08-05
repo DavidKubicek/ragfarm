@@ -208,6 +208,74 @@ per-alias, OWUI configuration moves to an **alias-keyed** structure
 travel with the model instead of being global constants. Idempotency of that
 script is preserved.
 
+#### 2a. Model registry and SLOTS — amended 2026-08-05
+
+The single-model assumption above is superseded. Several checkpoints now coexist
+and are switched between, including **mid-chat with the conversation intact**, for
+behavioural debugging and differential diagnosis.
+
+**`models/llm/active.json` is the source of truth**, git-tracked and human-edited:
+
+| key | meaning |
+|---|---|
+| `downloaded[]` | every model this deployment should have on disk |
+| `.model` | directory under `models/llm/` |
+| `.repo` | HF source — `--sync` cannot fetch what it cannot locate |
+| `.alias` | unique id; vLLM `--served-model-name` AND the OWUI base model |
+| `.preset` | OWUI preset id — **must be unique**, assigned by a human |
+| `.display` | name shown in the UI |
+| `.profile` | selects a `MODEL_TUNING["profiles"]` entry (prompt, sampler, caps) |
+| `.size_gib` | recorded after Hub verification; the GPU budget is sized from it |
+| `active[]` | index into `downloaded[]` per **slot**; these load on service start |
+
+Identity lives in the registry, **tuning stays in `setup_openwebui.py`** — the
+~200-line prompt bodies do not belong in JSON, and a newly fetched model inherits a
+known-good configuration by naming one profile.
+
+**What a slot is.** vLLM serves exactly **one base model per process**. Several
+`--served-model-name` values are aliases for the *same* weights, and LoRA adapters
+require a shared base — there is no multi-model mode. A slot is therefore our
+abstraction over one vLLM instance: `ragfarm-vllm@N.service`, port `8080 + 2N`
+(8081 is the reranker), configured by `.env.slotN`, which `activate_llm.py`
+generates. `stack.sh` and `deploy.sh` build their unit lists from `active[]`.
+
+**Two independent memory budgets, and a third trap.** ADR §5a already separates
+steady-state (`--gpu-memory-utilization`) from cold-start build (`MAX_JOBS`). Slots
+add a third: **`--gpu-memory-utilization` is per PROCESS and each instance computes
+its fraction of the WHOLE GPU independently — they do not coordinate.** Two slots at
+the single-model 0.50 will OOM. `activate_llm.py` derives each slot's value:
+
+    util = (weights_gib + KV_TARGET_GIB + OVERHEAD_GIB) / TOTAL_GIB
+
+and refuses to activate if the sum across slots exceeds `BUDGET_CEILING` (0.72),
+leaving headroom for the embedder (~1.6 GB), reranker (~0.9 GB), containers and OS.
+`weights_gib` comes from the registry's `size_gib`, **not** from `du`: a partially
+downloaded checkpoint measures small and would silently under-allocate the slot.
+
+**Tooling** (`fetch-llm.sh` / `activate-llm.sh` are retired — GGUF/llama.cpp-shaped;
+`fetch-encoder.sh` is NOT retired and still fetches the embedder+reranker pair):
+
+```bash
+scripts/fetch_llm.py -m <hf-repo>     # register + download + append to downloaded[]
+scripts/fetch_llm.py --sync           # fetch everything missing; report strays
+scripts/fetch_llm.py --sync --yes     # ...and actually delete them (default: dry-run)
+scripts/fetch_llm.py --verify         # byte-check on-disk against the Hub
+scripts/activate_llm.py -s 0 -a <alias>   # bind a model to a slot; restarts the unit
+scripts/activate_llm.py --status          # slots, ports, and the GPU budget
+```
+
+`fetch_llm.py` downloads with **curl, not `huggingface_hub`**. On this network
+`huggingface_hub` hangs indefinitely on sockets that die mid-transfer:
+`HF_HUB_DOWNLOAD_TIMEOUT` never fires, the process sits at 0 B/s and never returns
+control to a retry loop. It stalled twice and lost progress; curl with
+`--speed-limit`/`--speed-time` detects exactly that (socket open, delivering
+nothing) and `-C -` resumes. That combination moved 67 GB across several dropouts.
+
+`activate_llm.py` **refuses to run on an inconsistent registry** — duplicate
+`model`/`alias`/`preset`, an out-of-range `active[]` index, or one model bound to two
+slots. It does not auto-disambiguate: these names appear in the UI, so a
+machine-invented suffix would produce entries whose names lie about their contents.
+
 ### 3. Cross-encoder reranker stays on llama.cpp, at lowered priority
 
 ADR-0008's decision (cross-encoder replaces MMR) is untouched. Only its placement

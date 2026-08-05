@@ -1,22 +1,46 @@
-# Generative LLM Model Record — Qwen3-VL-30B-A3B-Instruct (NVFP4)
+# Generative LLM Model Record — the Qwen3-VL fleet
 
 > Supersedes the Qwen2.5-7B-Instruct / GGUF-Q4_K_M / llama.cpp-Vulkan record that
 > lived here (ADR-0001, AMD box). Generation moved to vLLM on the Spark per
 > ADR-0013; llama.cpp still serves the reranker (`../reranker/MODEL.md`), and the
 > embedder is in `../embeddings/MODEL.md`.
 
+**There is no longer a single LLM.** `active.json` in this directory is the
+git-tracked registry of every checkpoint the deployment should hold and which of
+them are bound to a vLLM **slot**; `scripts/fetch_llm.py` and
+`scripts/activate_llm.py` are the only supported way to change it (ADR-0013 §2a).
+Do not hand-edit `LLM_MODEL_PATH` / `LLM_SERVED_NAME` — they now live in the
+generated `.env.slotN` files.
+
+| model | quant | alias / preset | why it is here |
+|---|---|---|---|
+| Qwen3-VL-30B-A3B-**Instruct** | NVFP4 | `…-instruct-nvfp4` / `ragfarm-vision-instruct` | first model on the Spark; fast (76 tok/s), weaker at multi-column reasoning |
+| Qwen3-VL-30B-A3B-**Thinking** | NVFP4 | `…-thinking-nvfp4` / `ragfarm-vision` | flagship. Same quant as the Instruct, so Instruct-vs-Thinking is a clean single-variable comparison |
+| Qwen3-VL-30B-A3B-**Thinking** | FP8 | `…-thinking-fp8` / `ragfarm-vision-fp8` | official Qwen build; quant-fidelity reference against the NVFP4 one |
+| Qwen3-VL-**32B**-Thinking | NVFP4 | `…-32b-thinking-nvfp4` / `ragfarm-vision-dense` | **DENSE**, same family and quant as the MoE — isolates MoE-vs-dense |
+| Qwen3-VL-**8B**-Thinking | bf16 | `…-8b-thinking` / `ragfarm-vision-8b` | the old AMD box's quality benchmark, at bf16 rather than its Q4_K_M |
+
+Sizes, revisions and sources are in `active.json`; `scripts/fetch_llm.py --verify`
+byte-checks every one of them against the Hub.
+
+## Baseline record — Qwen3-VL-30B-A3B-Instruct (NVFP4)
+
+Everything measured below was measured on THIS checkpoint. Treat it as the
+baseline the others are compared against, not as "the model".
+
 | Field | Value |
 |---|---|
 | Repo | `ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4` (community NVFP4 + vision) |
 | Revision | `3c6162d5513d26f008628eebe9b4355559b4a305` (resolved 2026-08-03, ungated) |
-| Served alias | **`qwen3-vl-30b-a3b`** — must match the `MODEL_TUNING` key in `infra/openwebui/setup_openwebui.py` or the `ragfarm-vision` preset silently fails to bind |
+| Served alias | `qwen3-vl-30b-a3b` at the time of measurement; the registry now assigns `qwen3-vl-30b-a3b-instruct-nvfp4`. The alias is load-bearing — it is what OWUI binds its preset to |
 | Architecture | `Qwen3VLMoeForConditionalGeneration`, `model_type: qwen3_vl_moe` |
+| MoE shape | **128 experts/layer, top-8 routed, 48 layers** (all MoE). ~4.7M params per expert → ~29B total, ~3B active per token |
 | Quantization | `compressed-tensors`, format `nvfp4-pack-quantized`, weights 4-bit float. Vision blocks are in the `ignore` list (kept at higher precision) |
-| Weights | 4 safetensors shards, 17.86 GiB on disk; `LLM_MODEL_PATH` in `.env` |
+| Weights | 4 safetensors shards, 17.86 GiB on disk |
 | Engine | vLLM **0.26.0** in a DEDICATED venv `.venv-vllm` (torch 2.11.0+cu130) |
-| Unit | `manifests/ragfarm-vllm.service` → `127.0.0.1:8080/v1` |
+| Unit | `manifests/ragfarm-vllm@N.service` (templated per slot) → `127.0.0.1:8080/v1` for slot 0 |
 | Context | `--max-model-len 32768` |
-| Updated | 2026-08-03 |
+| Updated | 2026-08-05 |
 
 ## MoE backend on sm_121 — MEASURED, and it contradicts ADR-0013
 

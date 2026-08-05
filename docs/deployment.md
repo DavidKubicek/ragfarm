@@ -216,6 +216,31 @@ Everything here runs from the repo root on the host as `dave`. Grouped by job.
 
 **Model management (fetch / hot-swap)**
 
+> **REPLACED 2026-08-05 by `scripts/fetch_llm.py` + `scripts/activate_llm.py`,
+> driven by the git-tracked registry `models/llm/active.json` (ADR-0013 §2a).**
+>
+> ```bash
+> scripts/fetch_llm.py -m Firworks/Qwen3-VL-32B-Thinking-nvfp4   # register + download
+> scripts/fetch_llm.py --sync        # fetch everything the registry lists as missing
+> scripts/fetch_llm.py --verify      # byte-check what is on disk against the Hub
+> scripts/activate_llm.py -s 0 -a qwen3-vl-30b-a3b-thinking-nvfp4   # bind slot 0
+> scripts/activate_llm.py --status   # slots, ports, GPU budget
+> ```
+>
+> **SLOTS.** vLLM serves ONE base model per process, so two resident models means
+> two processes: `ragfarm-vllm@N.service` on port `8080 + 2N` (8081 is the
+> reranker), each with its own `.env.slotN` written by `activate_llm.py`. This is
+> what allows switching model **mid-chat** in Open WebUI with the conversation
+> intact. `--gpu-memory-utilization` is per process and instances do NOT
+> coordinate — two slots at the single-model 0.50 will OOM; `activate_llm.py`
+> derives each slot's share and refuses to exceed a 0.72 total.
+>
+> `activate_llm.py` errors out on a registry with duplicate `model`/`alias`/`preset`
+> rather than auto-fixing it: those names show up in the UI.
+>
+> The GGUF-era text below is kept because the mechanics are still accurate for
+> llama.cpp, which still serves the reranker. `fetch-encoder.sh` is NOT retired.
+
 > **`fetch-llm.sh` and `activate-llm.sh` are RETIRED for generation (ADR-0013).**
 > They are GGUF/`--mmproj`/llama.cpp-shaped, the Spark serves NVFP4 safetensors on
 > vLLM, and `deploy.sh` no longer calls them. Kept below because the *mechanics* are
