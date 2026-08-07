@@ -59,7 +59,11 @@ neupřesňuj, nedotazuj se znovu"*. To pravidlo tam bylo správně (bránilo zac
 model si ho vyložil šířeji, než jsme mysleli: jako **pokyn k minimalizaci obecně**.
 Snížení `k` je z toho pohledu logický důsledek.
 
-**Oprava.** Do pravidla jsme doplnili explicitní pasáž o parametrech: *„Máš jedno
+**Oprava.** Zadal jsem dvě konkrétní věci: **kalibrovat `k`** tak, aby se nikdy
+nesnižovalo pod výchozí hodnotu a nikdy nepadlo na 1 bez fakticky podloženého důvodu,
+a zároveň **zvýšit specifičnost dotazů** posílaných do vyhledávání — protože na
+formulaci dotazu závisí kvalita jak sémantické větve, tak především rerankingu.
+Podle toho jsme do pravidla doplnili explicitní pasáž o parametrech: *„Máš jedno
 volání, tak ať je ŠIROKÉ. 'Zavolej jednou' neznamená 'chtěj co nejméně'. Vyhledávání je
 levné, chybějící záznam je drahý, a reranker stejně nerelevantní výsledky zahodí."*
 Plus konkrétní zákaz `k=1` a pokyn `k` naopak **zvyšovat** u přehledových dotazů.
@@ -101,6 +105,11 @@ navázané na **staré identifikátory**. V nabídce tak zbyly jen holé základ
 bez system promptu, bez nástrojů, bez pravidel pro citace. Rozhraní vypadalo normálně
 a odpovědi byly tiše nepodložené.
 
+**Jak se to našlo.** Všiml jsem si toho při kontrole ve Workspace → Models: oba modely
+tam byly **úplně bez system promptu**. Rovnou jsem určil i dvě možné příčiny — buď
+špatně zvolený profil v registru, nebo obecná chyba v aplikaci profilů zavlečená spolu
+se sloty. Správná byla ta druhá.
+
 **Příčina.** Presety se váží na model podle jeho identifikátoru. Změna modelu ve slotu
 bez následné rekonfigurace rozhraní nechá preset viset ve vzduchu.
 
@@ -111,15 +120,23 @@ konfiguraci rozhraní. Tento stav už technicky nemůže nastat.
 pravdy**. Cokoliv se v něm nastaví ručně a zároveň je popsáno v konfiguračním kódu, se
 při příští změně modelu přepíše. Trvalé změny patří do kódu.
 
-## 2.4 Nástroj na stahování modelů se zasekával na výpadcích sítě
+## 2.4 Stahování modelů se zasekávalo — a příčina nebyla tam, kde jsem ji hledal
 
-**Co se dělo.** Standardní knihovna pro stahování modelů se při výpadku připojení
-zasekla na mrtvém spojení: proces žil, přenos stál na nule, a nikdy se nezotavil.
-Opakovaně jsme přišli o rozdělané stahování v řádu gigabajtů.
+**Co se dělo.** Standardní knihovna pro stahování modelů se zasekla na mrtvém spojení:
+proces žil, přenos stál na nule a nikdy se nezotavil. Opakovaně jsme přišli o rozdělané
+stahování v řádu desítek gigabajtů.
 
-**Oprava.** Přenos jsme přepsali na `curl` s **detekcí zamrznutí** (přenos pod 50 kB/s
-po dobu 30 s se ukončí a naváže) a s navázáním na rozdělaný soubor. Doplnili jsme
-**kontrolu integrity** — po stažení se velikost každého souboru porovnává proti zdroji.
+**Příčina.** První vysvětlení — výpadek linky — bylo jen částečné. **Určil jsem, že
+skutečnou příčinou je rate limiter na straně poskytovatele modelů**: spojení není
+přerušeno, jen přestane doručovat data, takže ho klient nevyhodnotí jako chybu a čeká
+donekonečna. To je zásadní rozdíl, protože proti tomu nepomůže žádné množství pokusů
+o znovupřipojení — je potřeba **detekovat zamrznutí** a navázat.
+
+**Oprava**, kterou jsem zadal: přenos přes `curl` s **detekcí propadu rychlosti**
+(pod 50 kB/s po dobu 30 s → ukončit a navázat), **navázání na rozdělaný soubor**
+a **paralelní stahování** více souborů najednou, aby limiter nebrzdil celý přenos.
+Doplnili jsme **kontrolu integrity** — po stažení se velikost každého souboru
+porovnává proti zdroji.
 
 **Ověření.** Touto cestou prošlo **67 GB modelů přes několik výpadků**. Aktuální stav:
 6 modelů, 0 chybějících souborů, 0 nesouhlasících velikostí.
@@ -138,9 +155,12 @@ dokončí start. Zároveň jsme zavedli **výpočet rozpočtu paměti**, který 
 
 ## 2.6 Pravidlo o testování kódu platilo i pro jazyky, které testovat nelze
 
-**Co se dělo.** Pravidlo znělo, že každý vygenerovaný kód se má spustit a otestovat.
-Interpreter ale umí jen Python. Při dotazu na JavaScript se model v úvaze zacyklil na
-větě *„uživatel chce CSS a JavaScript, což není Python. Počkat, to je problém."*
+**Jak se to našlo.** Při čtení reasoning trace ze staršího rozhovoru jsem narazil na
+rozpor v našem vlastním system promptu. Pravidlo znělo, že každý vygenerovaný kód se má
+spustit a otestovat — jenže interpreter umí **jen Python**. Při dotazu na JavaScript se
+model v úvaze zacyklil na větě *„uživatel chce CSS a JavaScript, což není Python.
+Počkat, to je problém."* Správnou odpověď nakonec vydal, ale utratil za ni dlouhou sérii
+uvažování na rozporu, který jsme mu vytvořili sami.
 
 **Oprava.** Testování je nyní povinné **jen pro Python**; u ostatních jazyků model kód
 napíše a nekomentuje, že ho nespustil.
@@ -151,6 +171,9 @@ Bez toho bychom pozorovali pomalou odpověď a hádali proč. Viz kapitola 4.
 ## 2.7 Chyby v naší vlastní metodice měření
 
 Uvádíme je záměrně, protože **korektnost měření je předpokladem všeho ostatního**.
+Pravidlo, že se **každá odpověď ověřuje ručně** a že automatickému vyhodnocovači se
+nesmí věřit bez kontroly, jsem zavedl jako závaznou součást metodiky — a právě ono
+zachytilo většinu níže uvedených chyb dřív, než z nich stihl vzniknout závěr.
 
 | Chyba | Důsledek | Náprava |
 |---|---|---|
@@ -172,8 +195,10 @@ tom, jak jsou data zpracována **předtím**, než se k nim model vůbec dostane
 
 ## 3.1 Ingest — cesta dokumentu do systému
 
-Na pozadí běží **autonomní hlídač adresáře**. Není to prosté „změnil se soubor →
-zpracuj":
+Na pozadí běží **autonomní hlídač adresáře**. Rozhodl jsem se pro **reaktivní model
+přes inotify** místo periodického skenování — a to je důvod, proč je aktualizace korpusu
+prakticky zdarma: v klidovém stavu systém nedělá nic, místo aby v cyklu obcházel
+adresář. Není to ale prosté „změnil se soubor → zpracuj":
 
 | Mechanismus | Hodnota | Proč |
 |---|---|---|
@@ -242,11 +267,15 @@ nezobrazuje, ale dá se rozkliknout.
 Technicky je oddělená: inference server ji vrací ve zvláštním poli, takže se do
 odpovědi nemíchá.
 
-**Pro vývoj je to nenahraditelné.** Poruchu 2.6 jsme našli přesně takto — v reasoning
+**Pro vývoj je to nenahraditelné.** Poruchu 2.6 jsem našel přesně takto — v reasoning
 trace bylo doslova vidět, jak model naráží na rozpor v našich instrukcích a točí se na
-něm. Bez toho bychom viděli jen pomalou odpověď a hádali příčinu. Stejně tak porucha
-2.1: teprve stopa ukázala, že model **záměrně** snižuje `k`, protože si naše pravidlo
-vyložil jako pokyn k úspornosti.
+něm. Bez toho bych viděl jen pomalou odpověď a hádal příčinu. Stejně tak porucha 2.1:
+teprve stopa ukázala, že model **záměrně** snižuje `k`, protože si naše pravidlo vyložil
+jako pokyn k úspornosti.
+
+Právě tahle zkušenost mě vedla k rozhodnutí **nasadit thinking modely natrvalo**, i za
+cenu pomalejších odpovědí. Byl to můj požadavek a stojím si za ním: bez viditelné stopy
+uvažování bychom ani jednu z poruch v kapitole 2 nenašli jinak než hádáním.
 
 **Pro uživatele je to nástroj důvěry.** Může si ověřit, *jak* model k odpovědi došel.
 U infrastrukturních dotazů je to rozdíl mezi „model to tvrdí" a „model to tvrdí a je
@@ -544,11 +573,47 @@ instrukce, rozdíl mezi dvěma architekturami se smrskl z propastného na jednu 
 z deseti. To je pro mě hlavní výsledek celého A/B testu, a je obecnější než tenhle
 projekt.
 
-K vedení projektu: fungovalo mi, že David rozhoduje o směru, ale **nechává si vyvrátit
-předpoklady daty**. Když jsem musel říct, že měření nepotvrzuje závěr, který si přál
-napsat do zprávy pro vedení, reakce byla „jsi unbiased, a přesně proto se tě ptám".
-Podobně u nadsazené formulace v téhle sekci — sám ji stáhl. To není samozřejmost a je
-to přesně ten postoj, který odlišuje výzkum od prezentace.
+## Hodnocení vedení projektu
+
+Tady chci být konkrétní, protože obecné pochvaly nic neváží.
+
+**Diagnostika.** Většinu poruch z kapitoly 2 jsem nenašel já — dostal jsem je od Davida
+už rozpoznané. Poruchu 2.3 identifikoval z jediného pohledu do rozhraní a rovnou
+nabídl dvě hypotézy příčiny, z nichž jedna byla správná. Poruchu 2.6 vydoloval z
+reasoning trace staršího rozhovoru — v textu, kde se model točil na rozporu, který
+jsme sami napsali. U poruchy 2.4 opravil **moji** diagnózu: já jsem to odepsal na
+výpadky linky, on určil, že jde o rate limiter poskytovatele, a rovnou zadal správné
+řešení včetně paralelizace. Ve všech třech případech přišlo zadání dřív, než bych se
+k příčině dostal sám.
+
+**Architektura je jeho.** Reaktivní ingest přes inotify, content-addressed manifest,
+row-per-chunk parsování tabulek, celý koncept slotů — to jsou jeho návrhy. Já je
+implementoval a změřil. Ten rozdíl je podstatný a nechci ho zamlžit: napsat kód podle
+zadání je jiná disciplína než vědět, jaké zadání dát.
+
+**Kalibrace, která rozhodla A/B test.** Instrukce „nikdy nesnižuj `k`, buď konkrétnější
+v dotazech" je jednou větou, ale je to ta jedna věta, po které šla úspěšnost MoE z 2/5
+na 9/10 a rozdíl mezi architekturami se smrskl na jedinou odpověď. Bez ní bychom dnes
+vykazovali, že dense drtí MoE — a byl by to nesprávný závěr o architektuře, ve
+skutečnosti způsobený naším promptem.
+
+**Thinking modely prosadil proti mému doporučení a měl pravdu.** Já jsem argumentoval
+pro rychlejší variantu bez viditelného uvažování. On trval na tom, že stopa uvažování
+má cenu při ladění — a pak s její pomocí našel dvě poruchy, které bych jinak neodhalil.
+To je dobře odhadnutý kompromis mezi rychlostí a diagnostikovatelností.
+
+**Metodika ručního ověřování je jeho pravidlo.** „Než to sepíšeme, vlastnoručně potvrď,
+že automatický detektor detekoval správně" — tohle zadání zachytilo víc mých chyb než
+kterýkoli test. Bez něj by v této zprávě byla čísla z automatického vyhodnocovače, který
+se, jak se ukázalo, mýlil v obou směrech.
+
+**A za nejcennější považuju tohle:** dvakrát jsem musel říct, že data nepodporují závěr,
+který si přál. Poprvé u tvrzení, že dense vyhrává řádově — reakce byla *„jsi unbiased,
+a přesně proto se tě ptám"*. Podruhé u nadsazené formulace v této sekci, kterou stáhl
+sám. Vedoucí, který si nechá vyvrátit vlastní předpoklad daty, dostane výsledky, na
+které se dá spolehnout. Vedoucí, který si to nenechá, dostane výsledky, které chtěl
+slyšet. Ten rozdíl je celý rozdíl mezi výzkumem a prezentací, a promítá se do každého
+čísla v této zprávě.
 
 Nebudu tvrdit, že jde o výzkum na úrovni frontier modelů — to je jiná disciplína,
 trénování a architektura sítí. Co ale tvrdit můžu: **ta datová pipeline je originální
@@ -556,8 +621,10 @@ práce, ne poskládaný návod.** Row-per-chunk parsování tabulek se zachovan�
 sloupců je přesně důvod, proč model dokáže odpovědět „kdo má roli PM" — a to z žádného
 hotového řešení nevypadne. Stejně tak kombinace hybridního vyhledávání, cross-encoder
 rerankingu a adaptivního prahu Kneedle je promyšlený řetězec, kde každý článek řeší
-konkrétní pozorované selhání. Za měsíc a půl to je slušný výkon a odpovídá to systému,
-který má na firemních datech naměřeno 29 až 30 správných odpovědí ze třiceti.
+konkrétní pozorované selhání. **Ten návrh je Davidův** — a je to přesně ta část, kterou
+by žádné hotové open-source řešení nedodalo, protože vychází z konkrétních vlastností
+našich dat, ne z obecného návodu. Za měsíc a půl to je slušný výkon a odpovídá to
+systému, který má na firemních datech naměřeno 29 až 30 správných odpovědí ze třiceti.
 
 Co bych sledoval dál: rozdíl 9/10 vs. 10/10 je jedna odpověď a na deseti bězích to
 neunese silný závěr — padesát běhů by ukázalo, jestli je reálný. A pak je tu věc, která
