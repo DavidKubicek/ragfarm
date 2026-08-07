@@ -193,3 +193,19 @@ BLOCKED: 07-agent-wiring — 2026-08-04T10:40Z
           deploy fragment is the only remaining work). If the UI ALSO fails to
           execute the tool, that is a real OWUI integration defect and I should
           look at the direct/client-side tool-server path next.
+
+NOTE: otevřené položky po A/B testu — 2026-08-07
+  owner:   Claude Opus 5 (zápis), rozhodnutí Dave
+  1) Porucha "narace tool callu místo jeho vyvolání". V jednom z 20 běhů MoE
+     nevygeneroval volání nástroje a místo odpovědi vypsal vlastní úvahu
+     ("<tool_call> tags. Let me double-check RULE 0..."). Dave rozhodl VYNECHAT
+     ji z docs/vyzkumna-zprava-2026-08-07.md a nechat si ji jako téma pro příští
+     weekly. Žádné číslo ve zprávě kvůli tomu nebylo upraveno — po opravě promptu
+     se v dalších 60 bězích neopakovala, takže 9/10 a 10/10 jsou skutečně
+     naměřené. Mitigace v RULE 1 ("EMIT THE CALL, DO NOT DESCRIBE IT") je
+     nasazená, ale NEOVĚŘENÁ proti tomuto konkrétnímu selhání.
+  2) Statistická síla. Rozdíl MoE 9/10 vs. dense 10/10 je jediná odpověď a na
+     deseti bězích neunese silný závěr. ~50 běhů by ukázalo, jestli je reálný.
+     Nástroj: scripts/bench_ab.py <out.json> 50
+  3) Doporučení ze zprávy: MoE jako výchozí model, dense ve slotu 1 pro úlohy,
+     kde je přesnost kritická. Zatím nerealizováno jako trvalá konfigurace.
