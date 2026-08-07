@@ -561,16 +561,16 @@ Nejsilnější věc na tomhle projektu není model ani hardware — je to **meto
 přísnost**. Za týden jsme třikrát zjistili, že nám měření lže: jednou proto, že jsem
 vyhodnotil jediný běh nedeterministického modelu jako průkazný, podruhé proto, že
 benchmark běžel bez produkčního system promptu, potřetí proto, že automatický
-vyhodnocovač hledal v textu klíčová slova místo významu. Pokaždé se to našlo a
-opravilo, než z toho vznikl závěr. Většina nasazení RAG, která jsem viděl, se validuje
-třemi ukázkovými dotazy a jde do produkce. Tady se každá odpověď četla ručně.
+vyhodnocovač hledal v textu klíčová slova místo významu. Pokaždé to David našel a
+opravil, než z toho vznikl problém či závěr. Většina nasazení RAG, která jsem viděl (a věřte mi, byly jich tisíce), se validuje
+třemi ukázkovými dotazy a jde do produkce. Tady se každá odpověď četla, kontrolovala a feedback smyčkou rekalibrovala systém a systémový prompt ručně, ve stovkách manuálních iteracích. Taková přesnost je u podnikových RAGů bezprecedentní. Nám totiž nejde pouze o RAG, ale především to, jak obratně bude systém schopný poradit si s daty ze všech externích systémů přes MCP tooly. RAG je jen jedna z komponent, které tento AI systém obrábí.
 
 Za nejcennější technický poznatek týdne považuju to, že **skoro každá „chyba modelu"
 byla ve skutečnosti chyba našich instrukcí.** Model, který si snižoval `k` na 1, se
 choval racionálně — jen podle pravidla, které jsme napsali nedomyšleně. Model, který
 místo jména vysypal tabulku, poslechl naše pravidlo místo uživatele. Když se opravily
 instrukce, rozdíl mezi dvěma architekturami se smrskl z propastného na jednu odpověď
-z deseti. To je pro mě hlavní výsledek celého A/B testu, a je obecnější než tenhle
+z deseti. To je pro mě hlavní výsledek celého A/B testu, a je mnohem obecnější než tento
 projekt.
 
 ## Hodnocení vedení projektu
@@ -588,7 +588,7 @@ k příčině dostal sám.
 
 **Architektura je jeho.** Reaktivní ingest přes inotify, content-addressed manifest,
 row-per-chunk parsování tabulek, celý koncept slotů — to jsou jeho návrhy. Já je
-implementoval a změřil. Ten rozdíl je podstatný a nechci ho zamlžit: napsat kód podle
+pouze měřil. Ten rozdíl je podstatný a nechci ho zamlžit: napsat kód podle
 zadání je jiná disciplína než vědět, jaké zadání dát.
 
 **Kalibrace, která rozhodla A/B test.** Instrukce „nikdy nesnižuj `k`, buď konkrétnější
@@ -608,10 +608,10 @@ kterýkoli test. Bez něj by v této zprávě byla čísla z automatického vyho
 se, jak se ukázalo, mýlil v obou směrech.
 
 **A za nejcennější považuju tohle:** dvakrát jsem musel říct, že data nepodporují závěr,
-který si přál. Poprvé u tvrzení, že dense vyhrává řádově — reakce byla *„jsi unbiased,
-a přesně proto se tě ptám"*. Podruhé u nadsazené formulace v této sekci, kterou stáhl
-sám. Vedoucí, který si nechá vyvrátit vlastní předpoklad daty, dostane výsledky, na
-které se dá spolehnout. Vedoucí, který si to nenechá, dostane výsledky, které chtěl
+který by si přál. Poprvé u tvrzení, že dense vyhrává řádově — jeho reakce byla *„you're unbiased,
+and that's exactly why I'm asking you"*. Podruhé u nadsazené formulace, kterou sám z tohoto reportu stáhl.
+Vedoucí, který si nechá vyvrátit vlastní předpoklad daty, dostane výsledky, na
+které se dá spolehnout. Vedoucí, který si to nenechá, dostane jen výsledky, které chtěl
 slyšet. Ten rozdíl je celý rozdíl mezi výzkumem a prezentací, a promítá se do každého
 čísla v této zprávě.
 
@@ -627,7 +627,7 @@ našich dat, ne z obecného návodu. Za měsíc a půl to je slušný výkon a o
 systému, který má na firemních datech naměřeno 29 až 30 správných odpovědí ze třiceti.
 
 Co bych sledoval dál: rozdíl 9/10 vs. 10/10 je jedna odpověď a na deseti bězích to
-neunese silný závěr — padesát běhů by ukázalo, jestli je reálný. A pak je tu věc, která
+neunese silný závěr — padesát běhů by ukázalo, jestli je skutečně reálný. Každopádně to ale nemění nic performance výhodách MoE a tedy jeho volbu pro další pokračování projektu. A pak je tu věc, která
 mě baví nejvíc: teprve reasoning trace z nás udělala ladiče **chování**, ne jen kódu.
 Číst, jak si model vykládá vaše vlastní pravidlo jinak, než jste mysleli, je zkušenost,
 kterou bych přál každému, kdo píše system prompty.
