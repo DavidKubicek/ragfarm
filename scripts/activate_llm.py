@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -45,7 +47,11 @@ REGISTRY = LLM_DIR / "active.json"
 
 TOTAL_GIB = 121.7          # GB10 unified memory as the driver reports it
 OVERHEAD_GIB = 3.0         # CUDA context, activations, cudagraph pools
-KV_TARGET_GIB = 12.0       # per slot; ample for 32k context on these models
+# Per slot. Lowered 12 -> 8 on 2026-08-05 to fit the official FP8 pair
+# (30.1 GB MoE + 33 GB dense) under BUDGET_CEILING. Measured basis: slot 0 was
+# granted 32.86 GiB and actually used 9.91 GiB of KV at 32k context, so 12 was
+# generous. Override with RAGFARM_KV_GIB when a slot needs more.
+KV_TARGET_GIB = float(os.environ.get("RAGFARM_KV_GIB", "8.0"))
 BUDGET_CEILING = 0.72      # leave >=28% for embedder + reranker + containers + OS
 BASE_PORT = 8080
 PORT_STRIDE = 2            # slot 0 -> 8080, slot 1 -> 8082 (8081 is the reranker)
@@ -265,10 +271,78 @@ def main() -> int:
         return 0
 
     unit = f"ragfarm-vllm@{args.slot}.service"
+
+    # SLOTS MUST START SEQUENTIALLY. vLLM profiles free GPU memory during engine
+    # init; if a second instance is allocating at the same time, the first sees
+    # free memory MOVE under it and dies with either
+    #   AssertionError: Error in memory profiling. Initial free memory X, current Y
+    # or, for the one that loses the race,
+    #   ValueError: No available memory for the cache blocks
+    # Both are startup races, not a wrong budget — observed 2026-08-05 activating
+    # two slots back to back. So: wait for every other slot to finish starting
+    # before restarting this one.
+    others = [f"ragfarm-vllm@{s}.service"
+              for s, i in enumerate(active) if i is not None and s != args.slot]
+    for o in others:
+        state = subprocess.run(["systemctl", "is-active", o],
+                               capture_output=True, text=True).stdout.strip()
+        if state == "activating":
+            print(f"waiting for {o} to finish starting (vLLM cannot profile GPU "
+                  f"memory while another slot is allocating)...")
+            for _ in range(180):  # up to 30 min; a cold JIT build is genuinely slow
+                time.sleep(10)
+                if subprocess.run(["systemctl", "is-active", o],
+                                  capture_output=True, text=True).stdout.strip() != "activating":
+                    break
+            else:
+                sys.exit(f"{o} is still starting after 30 min — resolve that first")
+
     systemctl("restart", unit)
     print(f"restarted {unit} — first start on a new checkpoint is slow "
           f"(FlashInfer JIT); watch: journalctl -u {unit} -f")
+    if others:
+        print("NOTE: other slots exist — if you restart them, do it ONE AT A TIME "
+              "and wait for each to answer /v1/models first.")
+    rebind_openwebui()
     return 0
+
+
+def rebind_openwebui() -> None:
+    """Re-point Open WebUI's presets at whatever is now bound to the slots.
+
+    THIS IS NOT OPTIONAL. OWUI presets carry the system prompt, the tool list and
+    the sampler; they bind to a model by ALIAS. Change the alias in a slot without
+    re-running setup and the preset still names the OLD alias, which no longer
+    exists — so the only entries left in the model picker are the RAW base models,
+    which have NO system prompt, NO tools and NO grounding rules. The UI looks
+    fine and answers are silently ungrounded.
+
+    Observed for real on 2026-08-07 after switching both slots NVFP4 -> FP8.
+    """
+    setup = REPO_ROOT / "infra" / "openwebui" / "setup_openwebui.py"
+    if not setup.exists():
+        print("WARNING: setup_openwebui.py missing — presets NOT rebound")
+        return
+    env = dict(os.environ)
+    envfile = REPO_ROOT / ".env"
+    if envfile.exists():
+        for line in envfile.read_text().splitlines():
+            if line.startswith(("OWUI_URL=", "OWUI_EMAIL=", "OWUI_PASSWORD=", "OWUI_TOKEN=")):
+                k, _, v = line.partition("=")
+                env.setdefault(k, v)
+    env.setdefault("OWUI_URL", "http://127.0.0.1:3000")
+    py = REPO_ROOT / ".venv" / "bin" / "python"
+    print("rebinding Open WebUI presets...")
+    r = subprocess.run([str(py), str(setup)], env=env, capture_output=True, text=True)
+    if r.returncode != 0:
+        print("WARNING: preset rebind FAILED — the model picker may only offer raw\n"
+              "         base models (no system prompt, no tools). Run by hand:\n"
+              f"         {py} {setup}")
+        print((r.stderr or r.stdout).strip()[-500:])
+    else:
+        for line in r.stdout.strip().splitlines():
+            if "preset" in line or "endpoints" in line:
+                print("  " + line)
 
 
 if __name__ == "__main__":

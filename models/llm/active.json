@@ -1,7 +1,7 @@
 {
     "active": [
-        1,
-        3
+        2,
+        5
     ],
     "downloaded": [
         {
@@ -53,6 +53,16 @@
             "profile": "vision-thinking",
             "comment": "The old-box quality benchmark, at bf16 rather than its Q4_K_M - an upper bound on what it could do.",
             "size_gib": 16.3
+        },
+        {
+            "model": "Qwen3-VL-32B-Thinking-FP8",
+            "repo": "Qwen/Qwen3-VL-32B-Thinking-FP8",
+            "alias": "qwen3-vl-32b-thinking-fp8",
+            "preset": "ragfarm-vision-dense-fp8",
+            "display": "Qwen3-VL 32B Thinking FP8 (dense)",
+            "profile": "vision-thinking",
+            "comment": "Official Qwen dense FP8 - apples-to-apples partner for the 30B-A3B MoE FP8",
+            "size_gib": 33.1
         }
     ]
 }
