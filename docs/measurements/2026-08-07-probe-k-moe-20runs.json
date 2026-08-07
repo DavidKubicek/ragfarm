@@ -1,0 +1,220 @@
+[
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 0,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 132.0,
+    "answer": "\n\nŘízení projektu Jméno: Marek Česal\nŘízení projektu Firma: EPC\nŘízení projektu Role/oblast: PM - řízení cut-over procesu\nTel: 739223474\nE-mail: marek.cesal@epcommodities.cz\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 1,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 29.2,
+    "answer": "\n\n| Jméno          | Firma    | Role/oblast                     | Tel           | E-mail                      |\n|----------------|----------|---------------------------------|---------------|-----------------------------|\n| Marek Česal    | EPC      | PM - řízení cut-over procesu     | 739223474     | marek.cesal@epcommodities.cz |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 2,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 23.7,
+    "answer": "\n\n| Jméno          | Firma    | Role/oblast                          | Tel          | E-mail                          |\n|----------------|----------|--------------------------------------|--------------|---------------------------------|\n| Marek Česal    | EPC      | PM - řízení cut-over procesu          | 739223474    | marek.cesal@epcommodities.cz    |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 3,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 25.3,
+    "answer": "\n\nJméno: Marek Česal, Firma: EPC, Role/oblast: PM - řízení cut-over procesu, Tel: 739223474, E-mail: marek.cesal@epcommodities.cz  \nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 4,
+    "k": 12,
+    "query": "projektovy manazer EPC",
+    "records": 6,
+    "ok": false,
+    "elapsed": 95.3,
+    "answer": "\n\n| Jméno          | Firma        | Role/oblast       | Tel          | E-mail                          |\n|----------------|--------------|-------------------|--------------|---------------------------------|\n| Petr Pyzsko    | EPC          | Sítě              | 737924492    | petr.pyszko@epcommodities.cz    |\n| Viktor Vážný    | EPC          | IT, x86, Windows  | 604 795 022  | vit.vazny@epcommodities.cz      |\n| Miroslav Laboj | EPC          | Aplikace a sítě   |              | miroslav.laboj@epcommodities.ch |\n| Michal Sterba  | EPC          | Aplikace          |              | michal.sterba@epcommodities.cz |\n| Viktor Bobro   | EPC          | Aplikace          |              | viktor.bobro@epcommodities.cz   |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 5,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 6,
+    "ok": false,
+    "elapsed": 98.6,
+    "answer": "\n\n| Jméno | Firma | Role/oblast | Tel | E-mail |\n|-------|-------|-------------|-----|--------|\n| Petr Pyzsko | EPC | Sítě | 737924492 | petr.pyszko@epcommodities.cz |\n| Viktor Vážný | EPC | IT, x86, Windows | 604 795 022 | vit.vazny@epcommodities.cz |\n| Miroslav Laboj | EPC | Aplikace a sítě |  | miroslav.laboj@epcommodities.ch |\n| Michal Sterba | EPC | Aplikace |  | michal.sterba@epcommodities.cz |\n| Viktor Bobro | EPC | Aplikace |  | viktor.bobro@epcommodities.cz |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 6,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 6,
+    "ok": false,
+    "elapsed": 64.2,
+    "answer": "\n\n| Jméno          | Firma          | Role/oblast       | Tel           | E-mail                         |\n|----------------|----------------|-------------------|---------------|--------------------------------|\n| Petr Pyzsko    | EPC            | Síťě              | 737924492     | petr.pyszko@epcommodities.cz   |\n| Viktor Vážený   | EPC            | IT, x86, Windows  | 604 795 022   | vit.vazny@epcommodities.cz     |\n| Miroslav Laboj | EPC            | Aplikace a sítě    |               | miroslav.laboj@epcommodities.ch|\n| Michal Sterba  | EPC            | Aplikace          |               | michal.sterba@epcommodities.cz |\n| Viktor Bobro   | EPC            | Aplikace          |               | viktor.bobro@epcommodities.cz  |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 7,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 31.9,
+    "answer": "\n\n| Jméno         | Firma             | Role/oblast                         | Tel       | E-mail                          |\n|---------------|-------------------|-------------------------------------|-----------|---------------------------------|\n| Marek Česal   | EPC               | PM - řízení cut-over procesu        | 739223474 | marek.cesal@epcommodities.cz    |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 8,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 49.7,
+    "answer": "\n\n| Řízení projektu Jméno | Řízení projektu Firma | Řízení projektu Role/oblast | Tel        | E-mail                          |\n|----------------------|----------------------|----------------------------|------------|---------------------------------|\n| Marek Česal          | EPC                  | PM - řízení cut-over procesu | 739223474  | marek.cesal@epcommodities.cz    |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "pm",
+    "run": 9,
+    "k": 8,
+    "query": "projektovy manazer EPC",
+    "records": 8,
+    "ok": true,
+    "elapsed": 38.3,
+    "answer": "\n\nProjektový manažer EPC je Marek Česal.\n\n| Řízení projektu Jméno | Řízení projektu Firma | Řízení projektu Role/oblast | Tel | E-mail |\n|---------------------|---------------------|---------------------------|-----|--------|\n| Marek Česal         | EPC                 | PM - řízení cut-over procesu | 739223474 | marek.cesal@epcommodities.cz |\n\nSource: EPC-CutOver_contacts-V1_1.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 0,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 84.5,
+    "answer": "\n\nsheet: List1, group: terminal servers, Registered in SkoNet: yes, Installed: yes, IPA: yes, SkoNet HW (_OS): HSMBVXIP001TS, VM name: hsmbvxip001ts, ONE managed: no, vCPU: 8, RAM (GB): 64, Location: C12, app/mgmt network - registered in SA DNS IP address: #NAME?, app/mgmt network - registered in SA DNS FQDN: hsmbvxip001ts.csr01.hs.skoda.vwg, app/mgmt network - registered in SA DNS VLAN ID: 502, app/mgmt network - registered in SA DNS Network name: H-CSR01-MB-S0001, backup network IP address: #N/A, backup network FQDN: hsmbvxip001ts.bck.hs.skoda.vwg, backup network VLAN ID: 944, backup network Network name: HS-BCK-001, storage network IP address: #N/A, storage network FQDN: hsmbvxip001ts.stg.hs.skoda.vwg, storage network VLAN ID: 945, storage network Network name: HS-STG-001\n\nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 1,
+    "k": null,
+    "records": null,
+    "ok": false,
+    "answer": "<tool_call> tags.\n\nLet me double-check RULE 0: yes, this is a specific VM's specs, which are in the corpus, so tool is needed. RULE 1 says to use search_corpus. So the correct tool call is as above.\n\nTherefore, the next step is to generate the tool call with the query as the user's question.\n\n\n<tool_call>\n{\"name\": \"search_corpus\", \"arguments\": {\"query\": \"Kolik vCPU a RAM má VM hsmbvxip001ts?\", \"k\": 8}}\n</tool_call>"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 2,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 127.0,
+    "answer": "\n\nVM hsmbvxip001ts má 8 vCPU a 64 GB RAM.  \n\nsheet: List1  \ngroup: terminal servers  \nRegistered in SkoNet: yes  \nInstalled: yes  \nIPA: yes  \nSkoNet HW (_OS): HSMBVXIP001TS  \nVM name: hsmbvxip001ts  \nONE managed: no  \nvCPU: 8  \nRAM (GB): 64  \nLocation: C12  \napp/mgmt network - registered in SA DNS IP address: #NAME?  \napp/mgmt network - registered in SA DNS FQDN: hsmbvxip001ts.csr01.hs.skoda.vwg  \napp/mgmt network - registered in SA DNS VLAN ID: 502  \napp/mgmt network - registered in SA DNS Network name: H-CSR01-MB-S0001  \nbackup network IP address: #N/A  \nbackup network FQDN: hsmbvxip001ts.bck.hs.skoda.vwg  \nbackup network VLAN ID: 944  \nbackup network Network name: HS-BCK-001  \nstorage network IP address: #N/A  \nstorage network FQDN: hsmbvxip001ts.stg.hs.skoda.vwg  \nstorage network VLAN ID: 945  \nstorage network Network name: HS-STG-001  \nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 3,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 121.4,
+    "answer": "\n\nVM name: hsmbvxip001ts, vCPU: 8, RAM (GB): 64  \nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 4,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 107.9,
+    "answer": "\n\nPro VM hsmbvxip001ts jsou následující parametry:\n\n| sheet | List1 |\n| group | terminal servers |\n| Registered in SkoNet | yes |\n| Installed | yes |\n| IPA | yes |\n| SkoNet HW (_OS) | HSMBVXIP001TS |\n| VM name | hsmbvxip001ts |\n| ONE managed | no |\n| vCPU | 8 |\n| RAM (GB) | 64 |\n| Location | C12 |\n| app/mgmt network - registered in SA DNS IP address | #NAME? |\n| app/mgmt network - registered in SA DNS FQDN | hsmbvxip001ts.csr01.hs.skoda.vwg |\n| app/mgmt network - registered in SA DNS VLAN ID | 502 |\n| app/mgmt network - registered in SA DNS Network name | H-CSR01-MB-S0001 |\n| backup network IP address | #N/A |\n| backup network FQDN | hsmbvxip001ts.bck.hs.skoda.vwg |\n| backup network VLAN ID | 944 |\n| backup network Network name | HS-BCK-001 |\n| storage network IP address | #N/A |\n| storage network FQDN | hsmbvxip001ts.stg.hs.skoda.vwg |\n| storage network VLAN ID | 945 |\n| storage network Network name | HS-STG-001 |\n\nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 5,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 20.0,
+    "answer": "\n\nvCPU: 8, RAM (GB): 64\n\nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 6,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 17.3,
+    "answer": "\n\nvCPU: 8, RAM (GB): 64  \nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 7,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 193.7,
+    "answer": "\n\nZáznam z dokumentu SA_Hosting_infra_VMs.xlsx:\n\n| sheet | group | Registered in SkoNet | Installed | IPA | SkoNet HW (_OS) | VM name | ONE managed | vCPU | RAM (GB) | Location | app/mgmt network - registered in SA DNS IP address | app/mgmt network - registered in SA DNS FQDN | app/mgmt network - registered in SA DNS VLAN ID | app/mgmt network - registered in SA DNS Network name | backup network IP address | backup network FQDN | backup network VLAN ID | backup network Network name | storage network IP address | storage network FQDN | storage network VLAN ID | storage network Network name |\n|-------|-------|----------------------|-----------|-----|-----------------|---------|-------------|------|----------|----------|---------------------------------------------------|---------------------------------------------|-------------------------------------------------|---------------------------------------------------|---------------------------|---------------------|------------------------|-----------------------------|----------------------------|----------------------|-------------------------|-----------------------------|\n| List1 | terminal servers | yes | yes | yes | HSMBVXIP001TS | hsmbvxip001ts | no | 8 | 64 | C12 | #NAME? | hsmbvxip001ts.csr01.hs.skoda.vwg | 502 | H-CSR01-MB-S0001 | #N/A | hsmbvxip001ts.bck.hs.skoda.vwg | 944 | HS-BCK-001 | #N/A | hsmbvxip001ts.stg.hs.skoda.vwg | 945 | HS-STG-001 |\n\nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 8,
+    "k": 8,
+    "query": "hsmbvxip001ts vCPU RAM",
+    "records": 8,
+    "ok": true,
+    "elapsed": 157.6,
+    "answer": "\n\nVM hsmbvxip001ts má následující parametry:\nsheet: List1\ngroup: terminal servers\nRegistered in SkoNet: yes\nInstalled: yes\nIPA: yes\nSkoNet HW (_OS): HSMBVXIP001TS\nVM name: hsmbvxip001ts\nONE managed: no\nvCPU: 8\nRAM (GB): 64\nLocation: C12\napp/mgmt network - registered in SA DNS IP address: #NAME?\napp/mgmt network - registered in SA DNS FQDN: hsmbvxip001ts.csr01.hs.skoda.vwg\napp/mgmt network - registered in SA DNS VLAN ID: 502\napp/mgmt network - registered in SA DNS Network name: H-CSR01-MB-S0001\nbackup network IP address: #N/A\nbackup network FQDN: hsmbvxip001ts.bck.hs.skoda.vwg\nbackup network VLAN ID: 944\nbackup network Network name: HS-BCK-001\nstorage network IP address: #N/A\nstorage network FQDN: hsmbvxip001ts.stg.hs.skoda.vwg\nstorage network VLAN ID: 945\nstorage network Network name: HS-STG-001\nSource: SA_Hosting_infra_VMs.xlsx"
+  },
+  {
+    "slot": "MoE-FP8",
+    "q": "vcpu",
+    "run": 9,
+    "k": 8,
+    "query": "hsmbvxip001ts",
+    "records": 6,
+    "ok": true,
+    "elapsed": 19.5,
+    "answer": "\n\nVM hsmbvxip001ts má 8 vCPU a 64 GB RAM.  \nSource: SA_Hosting_infra_VMs.xlsx"
+  }
+]
