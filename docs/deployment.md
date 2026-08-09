@@ -471,15 +471,55 @@ routes silently, never emits both):
 
 - **Mermaid** — the user says "mermaid". Rendered natively by OWUI as an SVG.
 - **draw.io** — the user says "draw.io" / "drawio" / "editable" / "interactive"
-  / "pan-zoom". The model emits a fenced ```html block wrapping the raw
-  `<mxfile>` XML plus a script tag pointing at `http://127.0.0.1:8091/viewer-static.min.js`
-  (the local `drawio-viewer` nginx container). OWUI's HTML preview iframe
-  loads it — pan/zoom/lightbox/layer toggle work in-chat.
+  / "pan-zoom". The model emits a fenced ```html block: a fixed wrapper plus the
+  raw `<mxfile>` XML it authored. OWUI's HTML preview iframe loads it —
+  pan/zoom/lightbox/layer toggle work in-chat. Everything comes from the local
+  `drawio-viewer` nginx container, so it works air-gapped.
 
-The IFRAME_CSP is set to allow scripts from `127.0.0.1:8091` only; nothing else
-opens up. The viewer's own external calls to `viewer.diagrams.net/styles` &
-`/shapes` may 404 on an offline demo box; the core rendering still works, only
-fancy stencil sets are missing.
+#### draw.io: the four things that must all be true
+
+Every one of these fails **silently** — OWUI renders an empty white box, with no
+error in the UI, the container logs, or anywhere else. All four were broken at
+once on 2026-08-09 and the symptom was identical in each case, so check them in
+this order rather than guessing.
+
+1. **The mirror must be on disk.** `infra/drawio-viewer/` is 153 MB of the
+   jgraph/drawio webapp, gitignored, and *nothing in the build pulls it* — a
+   fresh clone has only the two tracked HTML files, and nginx 404s
+   `js/viewer-static.min.js`. Fix: `scripts/fetch-drawio-viewer.sh` (idempotent,
+   no-ops when present). Step 07's deploy fragment runs it.
+2. **The URLs must name a host the CLIENT can reach.** This is the one place in
+   the whole system where `127.0.0.1` is wrong: the wrapper is fetched by the
+   user's browser, so on a remote client it means *that laptop's* loopback.
+   `setup_openwebui.py` bakes `RAGFARM_PUBLIC_HOST` into the wrapper, falling
+   back to autodetecting the default-route address.
+3. **`IFRAME_CSP` must whitelist that same host.** OWUI's preview iframe
+   otherwise refuses the script. `infra/compose.yaml` reads
+   `${RAGFARM_PUBLIC_HOST:-127.0.0.1}` — and compose, unlike the Python, *cannot
+   autodetect*. Leave the var unset and you get the worst combination: a
+   correctly autodetected URL that the CSP then blocks. So **set it in `.env`**;
+   `setup_openwebui.py` prints a warning when it is missing. Changing it needs
+   both `docker compose up -d open-webui` (CSP is read at container start) and a
+   `setup_openwebui.py` re-run.
+4. **The XML must reach the viewer the way the viewer expects.** It does *not*
+   read a child `<xml>` element — that form throws `can't access property
+   "length", a is undefined` and draws nothing. The XML goes in the JSON
+   `data-mxgraph` attribute under an `xml` key. The wrapper does this itself: the
+   model writes raw XML into a `<script type="application/xml">` tag and a
+   three-line bootstrap moves it across, which keeps the model's job
+   escaping-free.
+
+**Smoke test, before blaming the model:** open
+`http://<RAGFARM_PUBLIC_HOST>/fixtures/drawio-wrapper-reference.html` in the demo
+browser. It is the wrapper verbatim, with a known-good two-box diagram. Renders →
+items 1-3 are fine and the blank pane came from the model's XML. Blank → it is
+the infrastructure, not the model.
+
+**Model-side XML failures** (RULE 5 spells these out, all seen in practice):
+eliding attributes as `... />` instead of writing them out; reusing the reserved
+`id="0"` / `id="1"` for content cells; omitting `<mxGeometry>`, so a cell has no
+position or size; and re-deriving a user-supplied diagram from scratch instead of
+editing their XML in place, which throws away their layout and colours.
 
 ### Verified demo commands (no prep needed, run today)
 

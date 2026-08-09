@@ -39,6 +39,11 @@ Config knobs (env). Model settings are NOT here — they are in MODEL_TUNING:
     MCPO_RAG_URL           default http://127.0.0.1:8000/rag
     MCPO_PLACEMENT_URL     default http://127.0.0.1:8000/placement
     LLAMA_URL              default http://127.0.0.1:8080 (queried for the live alias)
+    RAGFARM_PUBLIC_HOST    address a REMOTE BROWSER uses to reach this box; default
+                           autodetected from the default route. Only affects the
+                           draw.io wrapper URLs in RULE 5, which the client fetches.
+    DRAWIO_VIEWER_URL      full override of the drawio-viewer base URL (default
+                           http://$RAGFARM_PUBLIC_HOST, i.e. compose's 0.0.0.0:80)
     FALLBACK_ALIAS         used when the served alias matches no MODEL_TUNING entry
     TEXT_BASE_MODEL_ID     optional PIN; forces this alias instead of autodetect
     VISION_BASE_MODEL_ID   optional PIN; takes precedence over TEXT_BASE_MODEL_ID
@@ -54,6 +59,39 @@ URL = os.environ.get("OWUI_URL", "http://127.0.0.1:3000").rstrip("/")
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080").rstrip("/")
 MCPO_RAG_URL = os.environ.get("MCPO_RAG_URL", "http://127.0.0.1:8000/rag")
 MCPO_PLACEMENT_URL = os.environ.get("MCPO_PLACEMENT_URL", "http://127.0.0.1:8000/placement")
+
+
+# ---------------------------------------------------------------------------
+# PUBLIC HOST — the address a REMOTE BROWSER uses to reach this box.
+# ---------------------------------------------------------------------------
+# Everything else in this file is server-side and rightly says 127.0.0.1. The
+# draw.io wrapper in RULE 5 is the one exception: those URLs are fetched by the
+# user's browser, inside OWUI's HTML-preview iframe. On a remote client
+# 127.0.0.1 is the CLIENT's own loopback, so viewer-static.min.js never loads
+# and the preview pane renders blank — no error, just an empty box.
+#
+# Autodetected from the route to the default gateway (a UDP "connect" sets up
+# no traffic, it only asks the kernel which source address it would use), so a
+# DHCP change is picked up on the next activation without anyone editing a
+# file. Override in .env when autodetect picks the wrong face: multi-homed box,
+# or clients that reach us via VPN/NAT/a DNS name rather than the LAN address.
+def _detect_public_host() -> str:
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: routed nowhere, sends nothing
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return "127.0.0.1"
+
+
+PUBLIC_HOST = os.environ.get("RAGFARM_PUBLIC_HOST") or _detect_public_host()
+# Base URL of the drawio-viewer nginx (compose binds it to 0.0.0.0:80).
+VIEWER_BASE = os.environ.get("DRAWIO_VIEWER_URL", f"http://{PUBLIC_HOST}").rstrip("/")
+
 # Optional alias PINS. Normally unset: the served alias is autodetected from
 # /v1/models and matched against MODEL_TUNING. Setting either forces that alias.
 # `BASE_MODEL_ID` is accepted as the historical spelling of TEXT_BASE_MODEL_ID.
@@ -411,32 +449,86 @@ VISION_GROUNDING_SYSTEM = (
     "\n"
     "  b) draw.io — when the user says \"draw.io\" / \"drawio\" / \"editable\" / \"interactive\" / "
     "\"pan-zoom\". Output ONE fenced ```html block using EXACTLY this wrapper so Open WebUI "
-    "renders it in-chat (window.*_PATH overrides point the viewer at our LOCAL mirror of the "
-    "draw.io webapp — no external fetches, so the diagram renders even air-gapped):\n"
+    "renders it in-chat (the window.*_PATH overrides point the viewer at our LOCAL mirror of the "
+    "draw.io webapp — no external fetches, so the diagram renders even air-gapped). Copy the "
+    "wrapper verbatim, including every URL: they are already correct, do not change them to "
+    "localhost, to a CDN, or to anything else.\n"
     "```html\n"
     "<!DOCTYPE html>\n"
     "<html><head><meta charset=\"utf-8\">\n"
     "<style>body{margin:0;padding:10px;background:#fff}"
     ".mxgraph{width:100%;height:500px;border:1px solid #ccc;border-radius:6px}</style>\n"
     "<script>\n"
-    "  window.STYLE_PATH   = 'http://127.0.0.1/styles';\n"
-    "  window.SHAPES_PATH  = 'http://127.0.0.1/shapes';\n"
-    "  window.STENCIL_PATH = 'http://127.0.0.1/stencils';\n"
-    "  window.DRAW_MATH_URL = 'http://127.0.0.1/math4/es5';\n"
-    "  window.GRAPH_IMAGE_PATH = 'http://127.0.0.1/img';\n"
+    f"  window.STYLE_PATH   = '{VIEWER_BASE}/styles';\n"
+    f"  window.SHAPES_PATH  = '{VIEWER_BASE}/shapes';\n"
+    f"  window.STENCIL_PATH = '{VIEWER_BASE}/stencils';\n"
+    f"  window.DRAW_MATH_URL = '{VIEWER_BASE}/math4/es5';\n"
+    f"  window.GRAPH_IMAGE_PATH = '{VIEWER_BASE}/img';\n"
     "</script>\n"
     "</head><body>\n"
-    "<div class=\"mxgraph\" data-mxgraph='{\"highlight\":\"#0000ff\",\"nav\":true,\"resize\":true,\"toolbar\":\"zoom layers lightbox\"}'>\n"
-    "<xml>\n"
-    "  <mxfile>... your syntactically valid draw.io XML here, RAW (no escaping, no JSON) ...</mxfile>\n"
-    "</xml>\n"
-    "</div>\n"
-    "<script type=\"text/javascript\" src=\"http://127.0.0.1/js/viewer-static.min.js\"></script>\n"
+    "<div class=\"mxgraph\" id=\"ragfarm-graph\"></div>\n"
+    "<script type=\"application/xml\" id=\"ragfarm-xml\">\n"
+    "  <mxfile host=\"app.diagrams.net\">\n"
+    "    <diagram name=\"example\" id=\"d0\">\n"
+    "      <mxGraphModel dx=\"800\" dy=\"600\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" "
+    "connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"850\" pageHeight=\"600\" "
+    "math=\"0\" shadow=\"0\">\n"
+    "        <root>\n"
+    "          <mxCell id=\"0\" />\n"
+    "          <mxCell id=\"1\" parent=\"0\" />\n"
+    "          <mxCell id=\"n1\" value=\"First box\" style=\"rounded=1;whiteSpace=wrap;html=1;\" "
+    "vertex=\"1\" parent=\"1\">\n"
+    "            <mxGeometry x=\"80\" y=\"120\" width=\"140\" height=\"60\" as=\"geometry\"/>\n"
+    "          </mxCell>\n"
+    "          <mxCell id=\"n2\" value=\"Second box\" style=\"rounded=1;whiteSpace=wrap;html=1;\" "
+    "vertex=\"1\" parent=\"1\">\n"
+    "            <mxGeometry x=\"300\" y=\"120\" width=\"140\" height=\"60\" as=\"geometry\"/>\n"
+    "          </mxCell>\n"
+    "          <mxCell id=\"e1\" style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+    "endArrow=classic;\" edge=\"1\" parent=\"1\" source=\"n1\" target=\"n2\">\n"
+    "            <mxGeometry relative=\"1\" as=\"geometry\"/>\n"
+    "          </mxCell>\n"
+    "        </root>\n"
+    "      </mxGraphModel>\n"
+    "    </diagram>\n"
+    "  </mxfile>\n"
+    "</script>\n"
+    "<script>\n"
+    "  document.getElementById('ragfarm-graph').setAttribute('data-mxgraph', JSON.stringify({\n"
+    "    highlight: '#0000ff', nav: true, resize: true, toolbar: 'zoom layers lightbox',\n"
+    "    xml: document.getElementById('ragfarm-xml').textContent.trim()\n"
+    "  }));\n"
+    "</script>\n"
+    f"<script type=\"text/javascript\" src=\"{VIEWER_BASE}/js/viewer-static.min.js\"></script>\n"
     "</body></html>\n"
     "```\n"
-    "The XML must start with `<mxfile>` and end with `</mxfile>`, live directly inside `<xml>` "
-    "unescaped, and be a valid draw.io document. One block, one caption, then stop — never a "
-    "second block, never the other format next to it.\n\n"
+    "The only part you author is the XML between the two `ragfarm-xml` script tags: it must "
+    "start with `<mxfile>`, end with `</mxfile>`, and be written RAW — no backslash escaping, no "
+    "JSON string, no HTML entities, no nested code fence. The small bootstrap script below it "
+    "hands that text to the viewer, which is the only form the viewer accepts; leave it exactly "
+    "as written. One block, one caption, then stop — never a second block, never the other format "
+    "next to it.\n"
+    "\n"
+    "  draw.io XML — four rules the viewer enforces silently. Break any one of them and the pane "
+    "renders BLANK with no error message, so there is no feedback to correct against: get them "
+    "right the first time.\n"
+    "    1. WRITE EVERY ATTRIBUTE OUT IN FULL. Never abbreviate any part of the XML with `...`, "
+    "`… />`, `<!-- unchanged -->`, \"same as above\", or any other elision — not for style strings, "
+    "not for geometry, not for repeated cells. This is machine-parsed input, not a summary for a "
+    "human reader; a `...` is a syntax error, not a shorthand. If the diagram is long, write it "
+    "long.\n"
+    "    2. `id=\"0\"` and `id=\"1\"` are RESERVED for the root and the default layer, exactly as "
+    "in the wrapper above. Never give a box or an arrow one of those two ids. Use descriptive ids "
+    "(`n1`, `db`, `e1`).\n"
+    "    3. EVERY box and arrow needs `parent=\"1\"` plus its own `<mxGeometry>` child — a box "
+    "needs `vertex=\"1\"` and `x`/`y`/`width`/`height`, an arrow needs `edge=\"1\"`, `source`, "
+    "`target` and `relative=\"1\"`. A cell without geometry has no position and no size, so it "
+    "draws nothing.\n"
+    "    4. TRANSFORMING a diagram the user supplied (reverse the arrows, rename a node, add a "
+    "box): start from THEIR XML and change only what they asked for. Keep their ids, styles, "
+    "geometry, labels and `mxGraphModel` attributes byte-for-byte — reversing an arrow means "
+    "swapping that edge's `source` and `target` and nothing else. Re-deriving the diagram from "
+    "scratch loses their layout and colours, which is a wrong answer even if it looks fine.\n\n"
 
     "RULE 6 — coding. The code interpreter is a PYTHON (Pyodide) sandbox. It cannot run "
     "JavaScript, HTML, CSS, SQL, bash, or anything else. So:\n"
@@ -658,9 +750,43 @@ def _tool_server(url, name, desc):
             "info": {"name": name, "description": desc}}
 
 
+def check_drawio_viewer() -> None:
+    """Verify the draw.io mirror is actually reachable at the URL we just baked
+    into RULE 5, and warn if PUBLIC_HOST was guessed rather than configured.
+
+    Both failure modes this catches are SILENT at runtime — OWUI's preview pane
+    renders an empty white box, no error in the UI, none in any log:
+
+      1. Mirror not rehydrated. infra/drawio-viewer/ is 153 MB and gitignored,
+         so a fresh clone has only the two tracked HTML files and nginx 404s
+         js/viewer-static.min.js. Fix: scripts/fetch-drawio-viewer.sh.
+      2. RAGFARM_PUBLIC_HOST unset. We autodetect and bake the right URL, but
+         compose cannot autodetect, so IFRAME_CSP falls back to 127.0.0.1-only
+         and the browser refuses the load we just configured.
+    """
+    probe = f"{VIEWER_BASE}/js/viewer-static.min.js"
+    try:
+        rc = requests.head(probe, timeout=5).status_code
+    except requests.RequestException as e:
+        rc = f"unreachable ({e.__class__.__name__})"
+    if rc == 200:
+        print(f"drawio viewer OK at {VIEWER_BASE}")
+    else:
+        print(f"WARNING: draw.io viewer NOT serving at {probe} ({rc}).\n"
+              "         RULE 5 diagrams will render as an EMPTY pane with no error.\n"
+              "         If the mirror is missing: scripts/fetch-drawio-viewer.sh")
+    if not os.environ.get("RAGFARM_PUBLIC_HOST"):
+        print(f"WARNING: RAGFARM_PUBLIC_HOST unset — autodetected {PUBLIC_HOST}.\n"
+              "         compose cannot autodetect, so IFRAME_CSP is pinned to 127.0.0.1\n"
+              "         and will BLOCK that URL for any remote browser. Set it in .env,\n"
+              "         then: source scripts/proxy-env.sh &&"
+              " docker compose -f infra/compose.yaml up -d open-webui")
+
+
 def main() -> None:
     tok = get_token()
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    check_drawio_viewer()
 
     # 1. Register the read-only mcpo tool servers, in order -> server:0, server:1.
     #    host-control is intentionally absent so the model cannot call reboot directly.

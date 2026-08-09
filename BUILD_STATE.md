@@ -642,6 +642,15 @@ prove the tools mounted. Body = the compose bring-up plus the idempotent
 `infra/openwebui/setup_openwebui.py` run that registers tool servers and upserts
 the model presets.
 
+The body MUST also run `scripts/fetch-drawio-viewer.sh` **before** the compose
+bring-up. The draw.io mirror is 153 MB and gitignored, so a fresh clone has only
+the two tracked HTML files; nothing else in the build pulls it. On 2026-08-09 the
+Spark had been running for days with an empty mirror and nobody noticed, because
+the failure is silent: nginx 404s `js/viewer-static.min.js`, the viewer never
+initialises, and OWUI's preview pane renders an empty white box with no error.
+The script is already idempotent (it no-ops when `styles/` and
+`js/viewer-static.min.js` are present), so it needs no extra guard of its own.
+
 ---
 
 ## Notes for whoever executes this build
