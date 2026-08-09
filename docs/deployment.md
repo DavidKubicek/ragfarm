@@ -505,22 +505,30 @@ the pane instead of nothing, so in practice a truly blank pane today means 1-3.
 4. **The XML must reach the viewer the way the viewer expects.** It does *not*
    read a child `<xml>` element — that form throws `can't access property
    "length", a is undefined` and draws nothing. The XML goes in the JSON
-   `data-mxgraph` attribute under an `xml` key. The wrapper does this itself: the
-   model writes raw XML into a `<script type="application/xml">` tag and a
-   bootstrap moves it across, which keeps the model's job escaping-free.
+   `data-mxgraph` attribute under an `xml` key. All of that now lives in
+   `infra/drawio-viewer/ragfarm-drawio.js`, which the wrapper's last line loads;
+   the model writes raw XML into a `<script type="application/xml">` tag and
+   never has to escape anything.
+
+   That file is tracked in git even though the rest of `infra/drawio-viewer/` is
+   not, and it exists for a specific reason: **boilerplate the model must retype
+   is a liability proportional to its length.** The wiring used to be ~15 lines
+   of inline bootstrap in the wrapper, and on a 31-node diagram the model
+   reproduced the whole page correctly *except* those lines — emitting a valid
+   `<mxfile>` that pasted into draw.io online perfectly, and a blank pane in
+   chat. It did keep the one-line `<script src>` right after them. So the logic
+   moved into the file that one line loads. Fixture:
+   `tests/fixtures/splunk-kb-model-output.drawio` is that answer's XML.
 5. **The reply must be inside a ```html fence.** OWUI only turns a *fenced* html
    block into a diagram pane; raw HTML in the message body renders as nothing.
    The model gets this right on small diagrams and has been observed dropping it
    on a 24-entity one, after ~9k tokens of reasoning. RULE 5 now demands the
    fence as the first characters of the reply.
 6. **The reply must not be cut off by `max_tokens`.** Reasoning and answer share
-   one budget (see the sizing note in `MODEL_TUNING["vision-thinking"]`). A reply
-   truncated after `</mxfile>` is the nastiest variant of this bug: the XML looks
-   complete and pastes into draw.io online perfectly, so suspicion lands on the
-   infrastructure — while what was actually lost is the tail of the page. The
-   bootstrap therefore lives in `<head>`, **above** the model's XML, so
-   truncation can no longer remove it, and it prints "the answer did not finish"
-   into the pane when `</mxfile>` is absent.
+   one budget (see the sizing note in `MODEL_TUNING["vision-thinking"]`), and a
+   diagram costs 9.5-13.3k completion tokens of which roughly two thirds is
+   reasoning. `ragfarm-drawio.js` prints "the answer did not finish" into the
+   pane when `</mxfile>` is absent, so this no longer presents as a blank box.
 
 **Smoke test, before blaming the model:** open
 `http://<RAGFARM_PUBLIC_HOST>/fixtures/drawio-wrapper-reference.html` in the demo
