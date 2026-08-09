@@ -232,7 +232,22 @@ MODEL_TUNING = {
                 "temperature": 0.6, "top_p": 0.95, "top_k": 20,
                 # A Thinking turn must fit reasoning + tool call + the full table.
                 # Too low and <think> burns the budget before the tool call lands.
-                "max_tokens": 16384,
+                #
+                # Sized against draw.io generation, the hungriest task we have.
+                # Measured 2026-08-09 on a 24-entity ER diagram: 13,317 completion
+                # tokens, of which ~9,000 were REASONING — the diagram itself was
+                # only ~4,400. Reasoning and answer share this one budget, which is
+                # why "16k tokens vs 14k characters of XML" looks like plenty and
+                # is not: real draw.io XML tokenises at 2.73 chars/token, so 14k
+                # chars is ~5.1k tokens, and the think comes out of the same purse.
+                #
+                # CEILING: prompt + max_tokens must stay under --max-model-len
+                # (32768). A vision turn's prompt is ~5.5k (3.5k system + image +
+                # question), so 24576 fits a first turn with ~2.5k to spare but
+                # NOT a long follow-up thread. Start a fresh chat for big diagram
+                # conversions. Raising this further means raising --max-model-len,
+                # which costs KV cache (~96 KiB/token) and a slot restart.
+                "max_tokens": 24576,
             },
             # file_context OFF: OWUI prepends `<attached_files>...` as TEXT in
             # ADDITION to routing image bytes through the vision encoder, and that
@@ -453,17 +468,41 @@ VISION_GROUNDING_SYSTEM = (
     "draw.io webapp — no external fetches, so the diagram renders even air-gapped). Copy the "
     "wrapper verbatim, including every URL: they are already correct, do not change them to "
     "localhost, to a CDN, or to anything else.\n"
+    "\n"
+    "  THE FENCE IS MANDATORY AND COMES FIRST. The very first characters of your reply are "
+    "```html on its own line — no preamble, no blank lines, no explanation before it — and the "
+    "reply ends with the closing ``` plus at most one caption sentence. Raw HTML with no fence "
+    "does not render: Open WebUI only turns a FENCED html block into a diagram pane, so an "
+    "unfenced reply shows the user nothing at all. This is easy to forget on a long diagram, "
+    "after a long think. Open the fence before you write anything else.\n"
     "```html\n"
     "<!DOCTYPE html>\n"
     "<html><head><meta charset=\"utf-8\">\n"
     "<style>body{margin:0;padding:10px;background:#fff}"
-    ".mxgraph{width:100%;height:500px;border:1px solid #ccc;border-radius:6px}</style>\n"
+    ".mxgraph{width:100%;height:500px;border:1px solid #ccc;border-radius:6px}"
+    ".err{font:13px sans-serif;color:#b85450;padding:8px}</style>\n"
     "<script>\n"
     f"  window.STYLE_PATH   = '{VIEWER_BASE}/styles';\n"
     f"  window.SHAPES_PATH  = '{VIEWER_BASE}/shapes';\n"
     f"  window.STENCIL_PATH = '{VIEWER_BASE}/stencils';\n"
     f"  window.DRAW_MATH_URL = '{VIEWER_BASE}/math4/es5';\n"
     f"  window.GRAPH_IMAGE_PATH = '{VIEWER_BASE}/img';\n"
+    "  document.addEventListener('DOMContentLoaded', function () {\n"
+    "    var box = document.getElementById('ragfarm-graph');\n"
+    "    var src = document.getElementById('ragfarm-xml');\n"
+    "    var xml = src ? src.textContent.trim() : '';\n"
+    "    function fail(m) { box.className = 'err'; box.textContent = m; }\n"
+    "    if (xml.indexOf('</mxfile>') < 0)\n"
+    "      return fail('Diagram XML is missing or was cut off before </mxfile> — the answer did "
+    "not finish. Ask again, or ask for a simpler diagram.');\n"
+    "    box.setAttribute('data-mxgraph', JSON.stringify({ highlight: '#0000ff', nav: true,\n"
+    "      resize: true, toolbar: 'zoom layers lightbox', xml: xml }));\n"
+    "    var s = document.createElement('script');\n"
+    f"    s.src = '{VIEWER_BASE}/js/viewer-static.min.js';\n"
+    f"    s.onerror = function () {{ fail('draw.io viewer did not load from {VIEWER_BASE} — the "
+    "local mirror is missing or unreachable from this browser.'); };\n"
+    "    document.body.appendChild(s);\n"
+    "  });\n"
     "</script>\n"
     "</head><body>\n"
     "<div class=\"mxgraph\" id=\"ragfarm-graph\"></div>\n"
@@ -493,21 +532,14 @@ VISION_GROUNDING_SYSTEM = (
     "    </diagram>\n"
     "  </mxfile>\n"
     "</script>\n"
-    "<script>\n"
-    "  document.getElementById('ragfarm-graph').setAttribute('data-mxgraph', JSON.stringify({\n"
-    "    highlight: '#0000ff', nav: true, resize: true, toolbar: 'zoom layers lightbox',\n"
-    "    xml: document.getElementById('ragfarm-xml').textContent.trim()\n"
-    "  }));\n"
-    "</script>\n"
-    f"<script type=\"text/javascript\" src=\"{VIEWER_BASE}/js/viewer-static.min.js\"></script>\n"
     "</body></html>\n"
     "```\n"
     "The only part you author is the XML between the two `ragfarm-xml` script tags: it must "
     "start with `<mxfile>`, end with `</mxfile>`, and be written RAW — no backslash escaping, no "
-    "JSON string, no HTML entities, no nested code fence. The small bootstrap script below it "
-    "hands that text to the viewer, which is the only form the viewer accepts; leave it exactly "
-    "as written. One block, one caption, then stop — never a second block, never the other format "
-    "next to it.\n"
+    "JSON string, no HTML entities, no nested code fence. The bootstrap in `<head>` hands that "
+    "text to the viewer, which is the only form the viewer accepts; leave it exactly as written "
+    "and never move it below the XML. One block, one caption, then stop — never a second block, "
+    "never the other format next to it.\n"
     "\n"
     "  draw.io XML — four rules the viewer enforces silently. Break any one of them and the pane "
     "renders BLANK with no error message, so there is no feedback to correct against: get them "

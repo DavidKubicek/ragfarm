@@ -64,7 +64,13 @@ def checks(html: str) -> dict[str, bool]:
         "kept fill colours": html.count("fillColor=#") == 3,
         # The viewer reads the XML from the data-mxgraph JSON, never from a
         # child <xml> element; the bootstrap in the wrapper is what bridges it.
-        "uses bootstrap wrapper": "ragfarm-xml" in html and "data-mxgraph" in html,
+        # The bootstrap must sit in <head>, ABOVE the XML. Below it, a reply cut
+        # short by max_tokens loses exactly the code that makes the page render
+        # while leaving a complete-looking <mxfile> behind — which is why the
+        # first report of this bug was "the XML pastes fine into draw.io online".
+        "bootstrap above the XML": (
+            "ragfarm-xml" in html and "data-mxgraph" in html
+            and html.index("data-mxgraph") < html.index('id="ragfarm-xml"')),
         # 127.0.0.1 here would be the CLIENT's loopback for a remote browser.
         "correct viewer host": f"{owui.VIEWER_BASE}/js/viewer-static.min.js" in html,
     }
@@ -83,14 +89,25 @@ def run_slot(port: int, save: pathlib.Path | None) -> bool:
         "messages": [{"role": "system", "content": owui.PROMPT_BODIES["vision"]},
                      {"role": "user", "content": TASK + INPUT_XML.read_text()}]})
     r.raise_for_status()
-    msg = r.json()["choices"][0]["message"]
+    body = r.json()
+    choice = body["choices"][0]
+    msg = choice["message"]
     answer = msg.get("content") or ""
+    usage = body.get("usage", {})
     print(f"=== {alias} :{port} | reasoning {len(msg.get('reasoning') or '')} chars"
-          f" | answer {len(answer)} chars")
+          f" | answer {len(answer)} chars"
+          f" | completion {usage.get('completion_tokens')} tok"
+          f" | finish={choice.get('finish_reason')}")
+    if choice.get("finish_reason") == "length":
+        print("  [FAIL] hit max_tokens — reasoning and answer share one budget;"
+              " raise it or simplify the diagram")
+        return False
 
+    # Unfenced raw HTML renders as nothing in OWUI. Observed on a 24-entity
+    # diagram after ~9k tokens of reasoning: correct HTML, no fence, no output.
     block = re.search(r"```html\n(.*?)```", answer, re.S)
     if not block:
-        print("  [FAIL] no ```html block in the answer")
+        print("  [FAIL] no ```html block in the answer (unfenced HTML does not render)")
         return False
     html = block.group(1)
     if save:

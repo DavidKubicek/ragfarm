@@ -476,12 +476,13 @@ routes silently, never emits both):
   pan/zoom/lightbox/layer toggle work in-chat. Everything comes from the local
   `drawio-viewer` nginx container, so it works air-gapped.
 
-#### draw.io: the four things that must all be true
+#### draw.io: the six things that must all be true
 
-Every one of these fails **silently** — OWUI renders an empty white box, with no
-error in the UI, the container logs, or anywhere else. All four were broken at
-once on 2026-08-09 and the symptom was identical in each case, so check them in
-this order rather than guessing.
+Every one of these used to fail **silently** — OWUI rendered an empty white box,
+with no error in the UI, the container logs, or anywhere else. Four were broken
+at once on 2026-08-09 and the symptom was identical in each case, so check them
+in this order rather than guessing. Items 5 and 6 now paint a red message into
+the pane instead of nothing, so in practice a truly blank pane today means 1-3.
 
 1. **The mirror must be on disk.** `infra/drawio-viewer/` is 153 MB of the
    jgraph/drawio webapp, gitignored, and *nothing in the build pulls it* — a
@@ -506,8 +507,20 @@ this order rather than guessing.
    "length", a is undefined` and draws nothing. The XML goes in the JSON
    `data-mxgraph` attribute under an `xml` key. The wrapper does this itself: the
    model writes raw XML into a `<script type="application/xml">` tag and a
-   three-line bootstrap moves it across, which keeps the model's job
-   escaping-free.
+   bootstrap moves it across, which keeps the model's job escaping-free.
+5. **The reply must be inside a ```html fence.** OWUI only turns a *fenced* html
+   block into a diagram pane; raw HTML in the message body renders as nothing.
+   The model gets this right on small diagrams and has been observed dropping it
+   on a 24-entity one, after ~9k tokens of reasoning. RULE 5 now demands the
+   fence as the first characters of the reply.
+6. **The reply must not be cut off by `max_tokens`.** Reasoning and answer share
+   one budget (see the sizing note in `MODEL_TUNING["vision-thinking"]`). A reply
+   truncated after `</mxfile>` is the nastiest variant of this bug: the XML looks
+   complete and pastes into draw.io online perfectly, so suspicion lands on the
+   infrastructure — while what was actually lost is the tail of the page. The
+   bootstrap therefore lives in `<head>`, **above** the model's XML, so
+   truncation can no longer remove it, and it prints "the answer did not finish"
+   into the pane when `</mxfile>` is absent.
 
 **Smoke test, before blaming the model:** open
 `http://<RAGFARM_PUBLIC_HOST>/fixtures/drawio-wrapper-reference.html` in the demo
