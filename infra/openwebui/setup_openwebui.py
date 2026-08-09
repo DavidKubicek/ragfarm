@@ -255,9 +255,22 @@ MODEL_TUNING = {
             "capabilities": {"vision": True, "file_context": False},
         },
         "vision-instruct": {
+            # Same system prompt as vision-thinking, deliberately: nothing in
+            # RULE 0-6 depends on whether the model emits a <think> block, and
+            # keeping them identical is what makes Instruct-vs-Thinking a clean
+            # single-variable comparison.
             "prompt": "vision",
             "params": {
-                "temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                # Qwen's recommended sampling for the INSTRUCT checkpoint, which
+                # is not the same as Thinking's 0.6/0.95. This profile carried
+                # the Thinking values until 2026-08-09 — contradicting the note
+                # in vision-thinking that says Instruct asks for 0.7/0.8.
+                "temperature": 0.7, "top_p": 0.8, "top_k": 20,
+                # Instruct spends nothing on reasoning, so the whole budget is
+                # answer. 16384 is ~44k characters of draw.io XML at the measured
+                # 2.73 chars/token — more than a faithful copy of the hardest
+                # diagram we have needs, and it leaves room under max-model-len
+                # for a multi-turn thread, which 24576 does not.
                 "max_tokens": 16384,
             },
             "capabilities": {"vision": True, "file_context": False},
