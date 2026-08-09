@@ -1,0 +1,41 @@
+{
+  "measured": "2026-08-09",
+  "model": "qwen3-vl-30b-a3b-thinking-fp8 (slot 0), max_tokens 24576, max_model_len 32768",
+  "input": "tests/fixtures/Splunk_in_KB.png — 28 entities, ~67 attribute rows, ~26 edges",
+  "question": "Is the poor 1:1 PNG->draw.io conversion a model limit or a max_tokens limit?",
+  "answer": "Neither, as posed. Perception is near-perfect and the token cap was not reached on the one-shot run. What fails is doing perception and exhaustive generation in one pass: the model emits a simplified 43-box diagram and stops voluntarily. Pushing it to be exhaustive moves the cost into REASONING, which is where the budget actually goes.",
+  "runs": [
+    {
+      "what": "one-shot 1:1 conversion",
+      "finish_reason": "stop",
+      "prompt_tokens": 5089,
+      "completion_tokens": 14326,
+      "reasoning_chars": 26782,
+      "xml_chars": 16212,
+      "vertices": 43,
+      "edges": 24,
+      "distinct_fills": 9,
+      "verdict": "valid XML, right colours, right column layout — but 43 flat boxes instead of 28 swimlane entities with 67 attribute rows. No ER markers. Legend overlaps. Stopped with 10k tokens of budget unused, so NOT truncation."
+    },
+    {
+      "what": "inventory only (perception isolated)",
+      "finish_reason": "stop",
+      "prompt_tokens": 5149,
+      "completion_tokens": 7704,
+      "reasoning_chars": 23909,
+      "answer_chars": 1760,
+      "verdict": "28/28 entities, every attribute row correct, even normalising the source's own typos ('Resonse Time'). One error: Data Centre marked inside the PoC frame when it sits below it. Perception is not the bottleneck.",
+      "output": "docs/measurements/2026-08-09-drawio-vision-inventory-pass.md"
+    },
+    {
+      "what": "pass 2: XML from its own inventory, told to count before sending",
+      "finish_reason": "length",
+      "prompt_tokens": 5806,
+      "completion_tokens": 24576,
+      "reasoning_chars": 56880,
+      "xml_chars": 0,
+      "verdict": "Budget entirely consumed by reasoning — ~20k tokens of it — leaving zero output. Instructing exhaustiveness and self-counting makes the think explode. This, not the diagram, is what max_tokens actually limits."
+    }
+  ],
+  "note": "chat_template_kwargs {'enable_thinking': false} does NOT suppress thinking on the Thinking checkpoint: the deliberation simply moves into `content` where the reasoning parser no longer separates it out. Worse, not better."
+}
