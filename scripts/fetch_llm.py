@@ -128,18 +128,36 @@ def cmd_add(args) -> int:
         print(f"already registered: {repo} — nothing to do")
         return 0
     name = slug(repo)
-    if any(e["model"] == name for e in reg["downloaded"]):
-        print(f"ERROR: directory name '{name}' already used by another repo", file=sys.stderr)
-        return 1
     entry = {
         "model": name,
         "repo": repo,
         "alias": args.alias or name.lower(),
-        "preset": args.preset,
+        # No shared default: 'ragfarm-vision' is already taken by an existing
+        # entry, so defaulting to it silently manufactures a duplicate.
+        "preset": args.preset or f"ragfarm-{name.lower()}",
         "display": args.display or name,
         "profile": args.profile,
         "comment": args.comment or "",
     }
+
+    # PRE-FLIGHT, BEFORE THE DOWNLOAD. activate_llm.py refuses to run at all on a
+    # registry with a duplicate model/alias/preset — deliberately, because only a
+    # human should decide which name wins. Discovering that after a 70 GB, hours
+    # long transfer would be maddening, and worse, the duplicate would already be
+    # in the registry and block every other slot operation until fixed by hand.
+    clashes = [f"{f}={entry[f]!r} already used by downloaded[{i}] ({e['model']})"
+               for f in ("model", "alias", "preset")
+               for i, e in enumerate(reg["downloaded"]) if e.get(f) == entry[f]]
+    if clashes:
+        print("ERROR: refusing to register — the registry must stay unique:", file=sys.stderr)
+        for c in clashes:
+            print("  " + c, file=sys.stderr)
+        print("\nPass explicit names, e.g.:\n"
+              f"  fetch_llm.py -m {repo} \\\n"
+              f"      --alias <served-name> --preset <owui-preset-id> \\\n"
+              f"      --display '<UI label>' --profile vision-instruct", file=sys.stderr)
+        return 1
+
     if not download(entry):
         print("download failed — NOT registering", file=sys.stderr)
         return 1
@@ -223,7 +241,8 @@ def main() -> int:
     ap.add_argument("--yes", action="store_true",
                     help="with --sync: actually delete strays (default is dry-run)")
     ap.add_argument("--alias", help="served alias / unique id (default: dirname lowercased)")
-    ap.add_argument("--preset", default="ragfarm-vision", help="OWUI preset id")
+    ap.add_argument("--preset", help="OWUI preset id (default: ragfarm-<dirname>); "
+                    "must be unique across the registry")
     ap.add_argument("--display", help="OWUI display name")
     ap.add_argument("--profile", default="vision-thinking",
                     help="MODEL_TUNING profile: vision-thinking | vision-instruct")

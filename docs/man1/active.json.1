@@ -1,0 +1,236 @@
+.TH ACTIVE.JSON 1 "2026-08-10" "ragfarm" "ragfarm LLM life-cycle"
+.SH NAME
+active.json \- the ragfarm model registry: what is on disk, and what is resident
+.SH SYNOPSIS
+.I models/llm/active.json
+.PP
+Git-tracked. Written by
+.BR fetch_llm (1)
+and
+.BR activate_llm (1).
+Read by both, and by
+.IR infra/openwebui/setup_openwebui.py .
+.SH DESCRIPTION
+One file answers two different questions, and keeping them apart is the whole
+design:
+.TP
+.B downloaded[]
+Every model this deployment
+.B should have on disk.
+Append-only in practice. Adding an entry is a claim that the checkpoint exists
+and was verified; removing one makes its directory unclaimed and therefore
+deletable by
+.BR "fetch_llm.py --sync --yes" .
+.TP
+.B active[]
+Which of them are
+.B resident in GPU memory,
+one array position per vLLM slot. The values are
+.B indexes into
+.BR downloaded[] ,
+not names.
+.PP
+The distinction matters because they change on different timescales and for
+different reasons. You fetch a model once; you re-bind slots several times a
+day. Storing the binding as an index means a slot cannot reference a model that
+was never registered.
+.SH FORMAT
+.RS
+.nf
+{
+    "active": [0, 5],
+    "downloaded": [
+        {
+            "model":    "Qwen3-VL-30B-A3B-Instruct-NVFP4",
+            "repo":     "ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4",
+            "alias":    "qwen3-vl-30b-a3b-instruct-nvfp4",
+            "preset":   "ragfarm-vision-instruct",
+            "display":  "Qwen3-VL 30B-A3B Instruct NVFP4 (MoE)",
+            "profile":  "vision-instruct",
+            "comment":  "first model on the Spark; fast, weaker at multi-column reasoning",
+            "size_gib": 17.9
+        }
+    ]
+}
+.fi
+.RE
+.PP
+Indented four spaces, UTF-8, non-ASCII left as-is. Both writers re-serialise in
+that shape on every save, so it stays reviewable in a diff.
+.SH FIELDS
+.TP
+.B model
+Directory name under
+.IR models/llm/ ,
+taken from the last path segment of
+.BR repo .
+This is what
+.B activate_llm.py -m
+matches. Unique.
+.TP
+.B repo
+Hugging Face repo id. The download source, and what
+.B --verify
+re-checks against. Keeping it lets a bare registry rebuild a whole machine with
+.BR "fetch_llm.py --sync" .
+.TP
+.B alias
+The served name. vLLM advertises it on
+.IR /v1/models ;
+Open WebUI binds its preset to it. Unique, and
+.B load-bearing
+\- see
+.B RENAMING
+below.
+.TP
+.B preset
+The Open WebUI preset id. Carries the system prompt, tool list and sampler.
+Unique.
+.TP
+.B display
+Human-readable label in the model picker. The only field with no machine
+meaning, and the one a person actually reads at demo time \- say the size, the
+quantisation, and dense or MoE.
+.TP
+.B profile
+Which
+.B MODEL_TUNING["profiles"]
+entry in
+.I infra/openwebui/setup_openwebui.py
+supplies prompt, sampler and capabilities:
+.B vision-thinking
+or
+.BR vision-instruct .
+Also read by
+.BR activate_llm (1)
+to decide whether the slot gets
+.BR --reasoning-parser .
+Not cosmetic \- see
+.BR fetch_llm (1).
+.TP
+.B comment
+Free text. The place for what the next person needs and cannot infer.
+.TP
+.B size_gib
+Total size recorded by
+.BR fetch_llm (1)
+.B after
+verifying every file against the Hub.
+.BR activate_llm (1)
+sizes the GPU budget from this rather than from
+.BR du ,
+because a half-downloaded checkpoint measures small and would under-allocate the
+slot. Absent on hand-placed models, which is why those are treated with
+suspicion.
+.SH THE ACTIVE ARRAY
+Position is the slot number. A
+.B null
+means the slot is empty.
+.PP
+.RS
+.nf
+"active": [0, 5]      slot 0 -> downloaded[0], slot 1 -> downloaded[5]
+"active": [0]         slot 0 only; single resident model
+"active": [null, 5]   slot 0 empty, slot 1 occupied
+"active": []          nothing resident
+.fi
+.RE
+.PP
+.BR "activate_llm.py --clear"
+drops
+.B trailing
+nulls so a single-slot deployment reads as
+.BR [0] .
+It never drops a null in the middle: the array is positional, so removing
+.B active[0]
+would silently promote slot 1's model to slot 0 \- and to port 8080.
+.SH CONSISTENCY RULES
+.BR activate_llm (1)
+validates on every run and
+.B exits
+rather than repairing. These are naming decisions; auto-fixing them would
+produce a UI whose entries do not mean what their names say.
+.IP \(bu 3
+.BR model ,
+.B alias
+and
+.B preset
+must each be unique across
+.BR downloaded[] .
+.IP \(bu 3
+Every value in
+.B active[]
+must be
+.B null
+or a valid index into
+.BR downloaded[] .
+.IP \(bu 3
+The same index must not appear in two slots \- that would start two vLLM
+instances on one set of weights, paying for it twice.
+.PP
+.BR fetch_llm (1)
+enforces the same uniqueness
+.I before
+downloading, so a clash costs you a typo and not an afternoon.
+.SH EDITING BY HAND
+Prefer the tools; they keep
+.IR .env.slot<N> ,
+systemd and Open WebUI in step. But the file is plain JSON and git-tracked, and
+two edits are legitimately manual:
+.TP
+.B Fixing a duplicate
+The validator refuses to guess. Decide which entry keeps the name, edit, re-run
+.BR "activate_llm.py --status" .
+.TP
+.B Retiring a model
+Remove its object from
+.BR downloaded[] .
+Check first that no
+.B active[]
+index still points at it, and remember indexes
+.B shift
+\- every entry after the one you removed moves down by one, so fix
+.B active[]
+in the same edit. This is the single sharpest edge in the format.
+.PP
+After any hand edit, run
+.B activate_llm.py --status
+before anything else. It validates and prints, and changes nothing.
+.SH RENAMING
+Changing
+.B alias
+on a model that is currently bound is a two-step operation, because the alias is
+what Open WebUI's preset points at. Edit the registry, then re-activate the slot
+so the unit is restarted with the new
+.B --served-model-name
+and the presets are re-bound:
+.RS
+.nf
+scripts/activate_llm.py -s 0 -m <same-model-dir>
+.fi
+.RE
+.PP
+Skip that and the preset names an alias nothing serves. The picker then offers
+only the raw base models \- no system prompt, no tools, no grounding rules \-
+and nothing looks broken. Answers are just silently ungrounded.
+.SH WHY IT IS IN GIT
+It is configuration, not state: it records intent for the whole deployment, and
+the diff of a slot change is exactly the review you want. A machine can be
+rebuilt from it with one command \-
+.B fetch_llm.py --sync
+\- so treat it with the same care as the compose file.
+.PP
+The generated
+.IR .env.slot<N> " files are "
+.B derived
+from it and carry a do-not-edit header. If they disagree with the registry, the
+registry is right and the fix is to re-activate the slot.
+.SH SEE ALSO
+.BR fetch_llm (1),
+.BR activate_llm (1),
+.BR env (1)
+.PP
+.I docs/decisions/ADR-0013
+for the slots design;
+.I models/llm/MODEL.md
+for the per-model record the registry deliberately does not carry.

@@ -25,11 +25,14 @@ sum across slots would exceed BUDGET_CEILING, leaving room for the embedder
 (~1.6 GB), the reranker (~0.9 GB), the container plane and the OS.
 
 USAGE
-  activate_llm.py -s 0                       interactive picker
+  activate_llm.py                            interactive: status, then act
+  activate_llm.py --status                   show slots, models, budget
+  activate_llm.py -s 0                       pick a model for slot 0
   activate_llm.py -s 0 -m Qwen3-VL-8B-Thinking
   activate_llm.py -s 1 -a qwen3-vl-32b-thinking-nvfp4
-  activate_llm.py --status                   show slots, models, budget
   activate_llm.py -s 1 --clear               free the slot (stop + unbind)
+
+Full documentation, including the single-big-model workflow:  man docs/man1/activate_llm.1
 """
 from __future__ import annotations
 
@@ -219,6 +222,62 @@ def systemctl(*a: str) -> int:
     return subprocess.run(["sudo", "systemctl", *a]).returncode
 
 
+def _ask(prompt: str, valid) -> str | None:
+    """-> a validated answer, or None if the operator backed out."""
+    while True:
+        try:
+            v = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if v in ("q", "quit", ""):
+            return None
+        if valid(v):
+            return v
+        print("  ? try again, or 'q' to quit")
+
+
+def interactive(reg: dict, args):
+    """Menu front-end for the same operations the flags perform.
+
+    Returns a populated `args` for main() to execute, or None to exit. It never
+    performs the action itself — that keeps one code path for both entry points,
+    so the interactive route cannot drift from the scripted one.
+    """
+    cmd_status(reg)
+    dl = reg["downloaded"]
+    print("\n  a  activate a model in a slot")
+    print("  c  clear a slot (free its memory)")
+    print("  q  quit")
+    what = _ask("\naction: ", lambda v: v in ("a", "c"))
+    if what is None:
+        return None
+
+    nslots = max(len(reg.get("active", [])), 1)
+    hint = f"0-{nslots}" if what == "a" else f"0-{nslots - 1}"
+    slot = _ask(f"slot [{hint}]: ", lambda v: v.isdigit())
+    if slot is None:
+        return None
+    args.slot = int(slot)
+
+    if what == "c":
+        args.clear = True
+        print(f"\n  equivalent: activate_llm.py -s {args.slot} --clear\n")
+        return args
+
+    print("\nRegistered models:")
+    for i, e in enumerate(dl):
+        on_disk = (LLM_DIR / e["model"]).exists()
+        print(f"  [{i}] {e['model']:<38} {weights_gib(e):5.1f} GiB  {e['alias']}"
+              f"{'' if on_disk else '  [NOT DOWNLOADED]'}")
+    pick = _ask("\npick index: ", lambda v: v.isdigit() and int(v) < len(dl))
+    if pick is None:
+        return None
+    args.model = dl[int(pick)]["model"]
+    print(f"\n  equivalent: activate_llm.py -s {args.slot} -m {args.model}\n")
+    return args
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -234,7 +293,16 @@ def main() -> int:
     if args.status:
         return cmd_status(reg)
     if args.slot is None:
-        ap.error("-s/--slot is required (or use --status)")
+        # Bare invocation is the discovery path: show the operator where things
+        # stand, then let them act, rather than printing a usage error at someone
+        # who has not memorised the flags. Every prompt maps 1:1 onto a flag, and
+        # the equivalent command is echoed before it runs, so the interactive
+        # session teaches the CLI instead of replacing it.
+        if not sys.stdin.isatty():
+            ap.error("-s/--slot is required when not on a terminal (or use --status)")
+        args = interactive(reg, args)
+        if args is None:
+            return 0
 
     active = reg.setdefault("active", [])
     while len(active) <= args.slot:
@@ -242,10 +310,32 @@ def main() -> int:
 
     if args.clear:
         active[args.slot] = None
+        # Trim TRAILING empties only. A hole in the middle must stay a hole:
+        # active[] is positional, so popping active[0] would silently promote
+        # slot 1's model to slot 0 and to port 8080. Trailing Nones carry no
+        # information, and dropping them is what makes --status and the budget
+        # report show a genuinely single-slot deployment rather than a phantom.
+        while active and active[-1] is None:
+            active.pop()
         save(reg)
+        # Stale .env.slotN would otherwise outlive the binding and describe a
+        # model that is no longer there — confusing on the next read, and a
+        # loaded gun if someone starts the unit by hand.
+        env = slot_env_path(args.slot)
+        if env.exists():
+            env.unlink()
+            print(f"removed {env.name}")
         if not args.no_restart:
             systemctl("stop", f"ragfarm-vllm@{args.slot}.service")
-        print(f"slot {args.slot} cleared")
+        print(f"slot {args.slot} cleared — {budget_report(reg):.3f} of "
+              f"{BUDGET_CEILING} now in use"
+              + ("  (no slots occupied)" if not active else ""))
+        # Clearing changes the model list exactly as much as activating does, so
+        # the presets must be rebound for the same reason (see rebind_openwebui):
+        # otherwise OWUI keeps offering a preset bound to an endpoint that is now
+        # dead, and picking it fails with a connection error mid-demo.
+        if not args.no_restart:
+            rebind_openwebui()
         return 0
 
     idx = resolve(reg, args)

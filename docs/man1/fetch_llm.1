@@ -1,0 +1,256 @@
+.TH FETCH_LLM 1 "2026-08-10" "ragfarm" "ragfarm LLM life-cycle"
+.SH NAME
+fetch_llm.py \- download, verify and register LLM checkpoints for ragfarm
+.SH SYNOPSIS
+.B scripts/fetch_llm.py
+.B -m
+.I HF_REPO
+.RB [ --alias
+.IR NAME ]
+.RB [ --preset
+.IR ID ]
+.RB [ --display
+.IR LABEL ]
+.RB [ --profile
+.IR NAME ]
+.RB [ --comment
+.IR TEXT ]
+.PP
+.B scripts/fetch_llm.py --sync
+.RB [ --yes ]
+.br
+.B scripts/fetch_llm.py --verify
+.SH DESCRIPTION
+.B fetch_llm.py
+is the first of the three LLM life-cycle tools. It puts a checkpoint on disk,
+proves the copy is complete, and records it in the registry so that
+.BR activate_llm (1)
+can bind it to a slot. It is the
+.B only
+supported way to add a model: a directory dropped into
+.I models/llm/
+by hand has no registry entry, no verified size, and therefore no way to size
+the GPU budget.
+.PP
+A model becomes usable in three stages, and this tool owns the first two:
+.PP
+.RS
+.nf
+fetch_llm.py   ->  on disk + in downloaded[]   ("we have it")
+activate_llm.py ->  bound to a slot, unit running ("it is resident")
+Open WebUI     ->  preset bound to its alias    ("a human can pick it")
+.fi
+.RE
+.SS Downloads are verified, then registered
+The registry entry is appended
+.B after
+the transfer succeeds and every file matches the Hub's size metadata. A failed
+or interrupted download leaves nothing in
+.IR active.json ,
+so a half-model can never be activated by accident.
+.PP
+On success the verified total is stored as
+.BR size_gib .
+That number, not
+.BR du ,
+is what
+.BR activate_llm (1)
+uses to compute the slot's memory share \- a partially downloaded checkpoint
+measures small and would silently under-allocate.
+.SS Why curl and not huggingface_hub
+On this network
+.B huggingface_hub
+hangs indefinitely on sockets that die mid-transfer.
+.B HF_HUB_DOWNLOAD_TIMEOUT
+does not fire, the process stays alive at 0 B/s, and control never returns to a
+retry loop. The cause is provider-side rate limiting rather than a dropped link:
+the connection stays open and simply stops delivering, so reconnecting on error
+never triggers because there is no error.
+.PP
+.B curl
+with
+.BR --speed-limit / --speed-time
+detects exactly that condition \- socket open, delivering nothing \- aborts, and
+resumes with
+.B -C -
+without losing bytes. Measured 2026-08-04:
+.B huggingface_hub
+stalled twice and lost progress;
+.B curl
+completed 67 GB across several dropouts. The Hub API is still used, but only for
+metadata: the file list and per-file sizes.
+.SH OPTIONS
+.TP
+.BR -m ", " --model " " \fIHF_REPO\fR
+Hugging Face repo id, e.g.
+.IR RedHatAI/Qwen2.5-VL-72B-Instruct-FP8-dynamic .
+Registers and downloads it. Re-running with a repo already in the registry is a
+no-op, so the command is safe to repeat.
+.TP
+.B --alias " " \fINAME\fR
+The served name. vLLM advertises it on
+.IR /v1/models ,
+and Open WebUI binds its preset to it. Defaults to the lowercased directory
+name. Must be unique.
+.TP
+.B --preset " " \fIID\fR
+The Open WebUI preset id this model gets. Defaults to
+.IR ragfarm-<dirname> .
+Must be unique.
+.TP
+.B --display " " \fILABEL\fR
+Human-readable label in the model picker. Free text; put the useful facts in it
+(size, quantisation, dense or MoE), because this is what someone reads at
+demo time.
+.TP
+.B --profile " " \fINAME\fR
+Which
+.B MODEL_TUNING
+profile in
+.I infra/openwebui/setup_openwebui.py
+supplies the system prompt, sampler and capabilities. Currently
+.B vision-thinking
+or
+.BR vision-instruct .
+Default:
+.BR vision-thinking .
+.IP
+.B Get this right.
+It is not cosmetic. It selects the sampling values, and
+.BR activate_llm (1)
+also reads it to decide whether the slot gets
+.BR --reasoning-parser .
+Give a non-thinking checkpoint the thinking profile and the parser files the
+model's entire answer as "reasoning": the chat message comes back
+.B empty
+with the whole reply hidden in the collapsed thinking trace. That is
+convincingly mistakable for a broken model or a bad quantisation. Observed
+2026-08-09.
+.TP
+.B --comment " " \fITEXT\fR
+Free-text note stored in the registry. Use it for the thing the next person will
+wish they knew: "dense, fits alone only", "community quant, unverified", "needs
+KV 16".
+.TP
+.B --sync
+Reconcile disk with the registry. Downloads anything in
+.B downloaded[]
+that is missing or fails verification, backfills
+.B size_gib
+for entries that predate that field, and
+.B reports
+directories under
+.I models/llm/
+that no registry entry claims.
+.TP
+.B --yes
+Only meaningful with
+.BR --sync :
+actually delete the unclaimed directories. Without it, deletions are a dry run
+and merely printed. A directory referenced by
+.B active[]
+is refused even with
+.BR --yes .
+.TP
+.B --verify
+Re-check every registered model on disk against the Hub. Changes nothing. This
+is the honest answer to "did that download actually finish?", and it is worth
+running before you plan an activation around a model you fetched overnight.
+.SH UNIQUENESS IS CHECKED BEFORE THE DOWNLOAD
+.BR activate_llm (1)
+refuses to operate at all on a registry containing a duplicate
+.BR model ,
+.B alias
+or
+.B preset
+\- deliberately, because choosing which name wins is a decision only a human
+should make, and silently disambiguating would produce a picker whose entries do
+not mean what their names say.
+.PP
+So this tool checks uniqueness
+.B first,
+before a byte is transferred. Discovering the clash after a 70 GB, multi-hour
+download would be bad enough; worse, the duplicate would then be
+.I in
+the registry, blocking every other slot operation until fixed by hand.
+.PP
+When it refuses, pass explicit names rather than editing
+.I active.json
+afterwards.
+.SH EXAMPLES
+.SS Add a model with everything named explicitly
+.RS
+.nf
+scripts/fetch_llm.py -m RedHatAI/Qwen2.5-VL-72B-Instruct-FP8-dynamic \\
+    --alias qwen25-vl-72b-instruct-fp8 \\
+    --preset ragfarm-vision-72b \\
+    --display 'Qwen2.5-VL 72B Instruct FP8 (dense)' \\
+    --profile vision-instruct \\
+    --comment 'dense 72B; fits alone only -- clear the other slot first'
+.fi
+.RE
+.SS Rebuild a machine from the registry
+On a fresh box with an empty
+.IR models/llm/ ,
+this is the whole restore:
+.RS
+.nf
+scripts/fetch_llm.py --sync
+.fi
+.RE
+.SS Check what is actually complete
+.RS
+.nf
+scripts/fetch_llm.py --verify
+.fi
+.RE
+.SS Reclaim disk from models you have retired
+.RS
+.nf
+scripts/fetch_llm.py --sync            # dry run: prints what it WOULD delete
+scripts/fetch_llm.py --sync --yes      # do it
+.fi
+.RE
+.PP
+Remove the entry from
+.B downloaded[]
+first \- that is what makes the directory unclaimed. Anything still referenced
+by
+.B active[]
+is refused regardless.
+.SH FILES
+.TP
+.I models/llm/active.json
+The registry this tool writes. See
+.BR active.json (1).
+.TP
+.I models/llm/<model>/
+Checkpoint directories, named after the repo's last path segment.
+.TP
+.I models/llm/MODEL.md
+The human record: what each model is for and what it measured. Not machine-read.
+Update it when you add a model \- the registry holds names and sizes, not
+judgement.
+.SH EXIT STATUS
+.TP
+.B 0
+Everything requested is on disk and verified.
+.TP
+.B 1
+A download failed, a name clashed, or
+.B --verify
+found something absent or incomplete. On a name clash nothing was downloaded and
+nothing was written.
+.SH SEE ALSO
+.BR activate_llm (1),
+.BR active.json (1),
+.BR env (1)
+.PP
+.I models/llm/MODEL.md
+for the per-model record;
+.I docs/decisions/ADR-0013
+for why the engine split cares which quantisation you fetch.
+.SH NOTES
+Downloads are large and slow. Run them in a detached session; the resume logic
+means an interrupted transfer costs time, not bytes, but it cannot resume a
+process you killed at the shell.
