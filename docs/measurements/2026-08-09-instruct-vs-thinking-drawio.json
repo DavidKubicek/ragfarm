@@ -52,5 +52,34 @@
     }
   ],
   "conclusion": "The two checkpoints fail on opposite halves of the task. Thinking gets the structure right and the detail wrong, by choice — it stops early with budget in hand. Instruct gets the nodes right and then cannot stop emitting edges. Neither is a drop-in answer for 1:1 conversion, and no max_tokens value fixes either: Thinking never reaches the cap, Instruct loops until it does.",
-  "next": "Split along the seam the data points at — nodes and edges as separate requests. The inventory pass (2026-08-09-drawio-vision-inventory-pass.md) already showed perception is near-perfect, so the raw material for both halves is there. Untested."
+  "next": "Split along the seam the data points at — nodes and edges as separate requests. The inventory pass (2026-08-09-drawio-vision-inventory-pass.md) already showed perception is near-perfect, so the raw material for both halves is there. Untested.",
+  "two_pass_split": {
+    "measured": "2026-08-10",
+    "model": "Qwen3-VL-30B-A3B-Instruct-NVFP4 (slot 0)",
+    "hypothesis": "The failure is on the EDGE half of the task, not the node half, so splitting nodes and edges into separate requests should remove the loop.",
+    "result": "Confirmed, and the loop disappears completely rather than merely shrinking.",
+    "pass1_nodes_only": {
+      "finish_reason": "stop",
+      "completion_tokens": 8847,
+      "vertices": 98,
+      "swimlanes": 30,
+      "edges_leaked": 0,
+      "note": "28 entities + their attribute rows + PoC frame + Legenda frame"
+    },
+    "pass2_edges_only": {
+      "finish_reason": "stop",
+      "completion_tokens": 1750,
+      "edges": 26,
+      "duplicates": 0,
+      "malformed": 0,
+      "note": "given pass 1's box ids; source diagram has ~26 edges"
+    },
+    "versus_single_pass": "312 edges, 89 duplicates, 49 dangling, budget exhausted -> 26 edges, 0 duplicates, 0 dangling, 1,750 tokens.",
+    "first_attempt_failed_on_our_prompt_again": [
+      "The child style string 'strokeColor=none;fillColor=none' from my example got appended to the PARENT box styles too. mxGraph takes the LAST occurrence of a key, so every box rendered invisible. Fixed by giving a complete worked example of one entity instead of describing the styles, plus naming the last-key-wins rule explicitly.",
+      "Boxes came out 'rounded=1' rather than 'swimlane', so attribute children positioned from y=0 and overlapped the title. Fixed by the same worked example.",
+      "Edges came out style='orthogonalEdgeStyle;...' missing the 'edgeStyle=' key, and self-closing with no <mxGeometry> child. Both invisible. Fixed by a worked example and by naming the two failure modes."
+    ],
+    "artifact": "tests/fixtures/Splunk_in_KB-output.drawio"
+  }
 }
