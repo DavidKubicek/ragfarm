@@ -1,0 +1,13 @@
+{
+  "measured": "2026-08-09",
+  "symptom": "Qwen3-VL-30B-A3B-Instruct-NVFP4 in slot 0: the chat message came back EMPTY with the entire diagram streaming into the collapsible 'Thought for 4 minutes' panel. Read as a bad community quantisation.",
+  "actual_cause": "Our slot config, not the checkpoint. .env.slotN never set the reasoning parser, so the unit inherited the global LLM_REASONING_PARSER=qwen3 meant for the Thinking models. That parser keys on </think>; finding none — an Instruct model never emits one — it classifies the WHOLE output as reasoning and leaves content empty. Confirmed on a two-token prompt: content=None, reasoning='OK'.",
+  "second_symptom": "'4 minutes, that is dense speed, not MoE.' The wall time was real; the inference was not slow. ~18k tokens at ~76 tok/s is ~4 minutes. It LOOKED like thinking because the misrouted answer rendered in the thinking panel — one root cause presenting as two faults.",
+  "decode_tok_per_s": {
+    "qwen3-vl-30b-a3b-instruct-nvfp4 (slot 0, MoE)": 76.0,
+    "qwen3-vl-30b-a3b-instruct-nvfp4 (after the fix)": 73.6,
+    "qwen3-vl-32b-thinking-fp8 (slot 1, DENSE, for contrast)": 5.9,
+    "note": "76 tok/s is exactly the figure recorded for this checkpoint in models/llm/MODEL.md line 17. The quantisation is fine. Dense on this box is ~13x slower, which is what dense actually looks like here."
+  },
+  "fix": "manifests/ragfarm-vllm@.service takes $LLM_REASONING_ARGS (single-dollar, so systemd word-splits it and an empty value yields no argument) and activate_llm.py writes the whole flag pair per slot from the registry profile. Global LLM_REASONING_PARSER retired."
+}

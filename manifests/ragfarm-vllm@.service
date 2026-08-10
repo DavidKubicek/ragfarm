@@ -48,7 +48,7 @@ ExecStart=/home/dave/ragfarm/.venv-vllm/bin/vllm serve ${LLM_MODEL_PATH} \
   --host 127.0.0.1 --port ${LLM_PORT} \
   --moe-backend ${LLM_MOE_BACKEND} \
   --enable-auto-tool-choice --tool-call-parser hermes \
-  --reasoning-parser ${LLM_REASONING_PARSER} \
+  $LLM_REASONING_ARGS \
   --max-model-len ${LLM_MAX_MODEL_LEN} \
   --gpu-memory-utilization ${LLM_GPU_MEM_UTIL} \
   --max-num-batched-tokens ${LLM_MAX_NUM_BATCHED_TOKENS} \
@@ -58,9 +58,19 @@ ExecStart=/home/dave/ragfarm/.venv-vllm/bin/vllm serve ${LLM_MODEL_PATH} \
 # single-model 0.50 will OOM. activate_llm.py derives each slot's value from the
 # checkpoint size and refuses to exceed a total ceiling.
 #
-# --reasoning-parser separates a Thinking model's <think> block into
-# reasoning_content so Open WebUI renders it as a collapsible trace instead of
-# mixing it into the answer. Harmless for Instruct models, which emit no block.
+# $LLM_REASONING_ARGS carries the WHOLE --reasoning-parser flag pair, not just its
+# value, and uses the single-dollar form on purpose: systemd word-splits $VAR and
+# does NOT split ${VAR}, so an empty value here expands to zero arguments rather
+# than to a dangling flag. That is what lets an Instruct slot run with no parser
+# at all. activate_llm.py writes it per slot from the registry's profile.
+#
+# Why it cannot simply always be qwen3: that parser splits the stream on
+# </think>, and when there is no </think> it classifies the ENTIRE output as
+# reasoning and leaves content empty. An Instruct model never emits one, so the
+# whole answer lands in the collapsible "thinking" panel and the message body is
+# blank. Observed 2026-08-09 with Qwen3-VL-30B-A3B-Instruct-NVFP4, and it reads
+# as a model or quantisation fault — the answer is there, streaming, just filed
+# under the wrong key.
 TimeoutStartSec=1200
 # Shutdown is slow too (engine core + worker procs); the default 90s SIGTERM
 # window expired repeatedly and systemd fell back to SIGKILL on every stop.
