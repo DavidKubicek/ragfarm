@@ -267,11 +267,20 @@ MODEL_TUNING = {
                 # in vision-thinking that says Instruct asks for 0.7/0.8.
                 "temperature": 0.7, "top_p": 0.8, "top_k": 20,
                 # Instruct spends nothing on reasoning, so the whole budget is
-                # answer. 16384 is ~44k characters of draw.io XML at the measured
-                # 2.73 chars/token — more than a faithful copy of the hardest
-                # diagram we have needs, and it leaves room under max-model-len
-                # for a multi-turn thread, which 24576 does not.
-                "max_tokens": 16384,
+                # answer. Same ceiling arithmetic as vision-thinking: a ~5.1k
+                # vision prompt plus 24576 fits under --max-model-len 32768 for a
+                # first turn, not for a long thread.
+                #
+                # Do NOT read this as headroom that fixes hard diagrams. Measured
+                # 2026-08-09 on tests/fixtures/Splunk_in_KB.png, three runs
+                # (16384, 24576, and 24576 with presence_penalty 1.5): all three
+                # ran the budget dry inside an EDGE REPETITION LOOP. Vertices come
+                # out right — 23-24 of them, well laid out, which is why the
+                # render looks far better than Thinking's — and then it emits 312+
+                # edges for a source that has ~26, most of them duplicates. More
+                # budget buys more loop, and presence_penalty does not break it.
+                # The failure is on the edge half of the task, not the node half.
+                "max_tokens": 24576,
             },
             "capabilities": {"vision": True, "file_context": False},
         },

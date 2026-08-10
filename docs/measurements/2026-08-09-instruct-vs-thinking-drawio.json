@@ -1,0 +1,56 @@
+{
+  "measured": "2026-08-09",
+  "input": "tests/fixtures/Splunk_in_KB.png — 28 entities, ~67 attribute rows, ~26 edges",
+  "prompt": "the production vision system prompt + Dave's 1:1 conversion request, verbatim",
+  "runs": [
+    {
+      "model": "Qwen3-VL-30B-A3B-Thinking-FP8",
+      "max_tokens": 24576,
+      "presence_penalty": null,
+      "finish_reason": "stop",
+      "completion_tokens": 14326,
+      "reasoning_chars": 26782,
+      "vertices": 43,
+      "edges": 24,
+      "verdict": "Finishes voluntarily with 10k tokens spare. Spends ~2/3 of the budget deliberating, then emits a SIMPLIFIED diagram: 43 flat boxes, no attribute rows, no ER markers. Renders, but is not a 1:1 copy."
+    },
+    {
+      "model": "Qwen3-VL-30B-A3B-Instruct-NVFP4",
+      "max_tokens": 16384,
+      "presence_penalty": null,
+      "finish_reason": "length",
+      "completion_tokens": 16384,
+      "reasoning_chars": 0,
+      "answer_chars": 50800,
+      "verdict": "budget dry, mid-diagram"
+    },
+    {
+      "model": "Qwen3-VL-30B-A3B-Instruct-NVFP4",
+      "max_tokens": 24576,
+      "presence_penalty": null,
+      "finish_reason": "length",
+      "completion_tokens": 24576,
+      "reasoning_chars": 0,
+      "answer_chars": 75929,
+      "vertices": 24,
+      "edges": 312,
+      "duplicate_edges": 89,
+      "edges_to_nonexistent_nodes": 49,
+      "verdict": "EDGE REPETITION LOOP. The 24 vertices are good — right labels, sane layout, which is why the rendered result looks much closer to the original than Thinking's. Then it emits 312 edges for a source with ~26, 116 of them pointing at one node."
+    },
+    {
+      "model": "Qwen3-VL-30B-A3B-Instruct-NVFP4",
+      "max_tokens": 24576,
+      "presence_penalty": 1.5,
+      "finish_reason": "length",
+      "completion_tokens": 24576,
+      "reasoning_chars": 0,
+      "vertices": 23,
+      "edges": 316,
+      "duplicate_edges": 268,
+      "verdict": "presence_penalty does not break the loop"
+    }
+  ],
+  "conclusion": "The two checkpoints fail on opposite halves of the task. Thinking gets the structure right and the detail wrong, by choice — it stops early with budget in hand. Instruct gets the nodes right and then cannot stop emitting edges. Neither is a drop-in answer for 1:1 conversion, and no max_tokens value fixes either: Thinking never reaches the cap, Instruct loops until it does.",
+  "next": "Split along the seam the data points at — nodes and edges as separate requests. The inventory pass (2026-08-09-drawio-vision-inventory-pass.md) already showed perception is near-perfect, so the raw material for both halves is there. Untested."
+}
