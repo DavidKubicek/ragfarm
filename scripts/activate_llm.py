@@ -326,7 +326,17 @@ def main() -> int:
             env.unlink()
             print(f"removed {env.name}")
         if not args.no_restart:
-            systemctl("stop", f"ragfarm-vllm@{args.slot}.service")
+            unit = f"ragfarm-vllm@{args.slot}.service"
+            systemctl("stop", unit)
+            # Disable too, or a slot that is enabled for autostart comes back at
+            # the next boot with no .env.slotN — no LLM_MODEL_PATH, no served
+            # name — and fails on a machine nobody is watching. Clearing a slot
+            # means "this slot is not in service", and that has to survive a
+            # reboot the same way the binding does. Harmless when not enabled.
+            if subprocess.run(["systemctl", "is-enabled", unit],
+                              capture_output=True, text=True).stdout.strip() == "enabled":
+                systemctl("disable", unit)
+                print(f"disabled {unit} at boot (slot is no longer bound)")
         print(f"slot {args.slot} cleared — {budget_report(reg):.3f} of "
               f"{BUDGET_CEILING} now in use"
               + ("  (no slots occupied)" if not active else ""))

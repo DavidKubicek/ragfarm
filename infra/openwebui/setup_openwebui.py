@@ -913,9 +913,58 @@ def main() -> None:
         mark = "  <- LIVE" if (active and alias == active) else ""
         print(f"preset '{p['preset_id']}' ready (alias={alias}, tools={tool_ids}){mark}")
 
+    prune_stale_presets(H, {p["preset_id"] for p in presets})
+
     if aliases is not None and active is None:
         print("WARNING: no preset matches a served model — check the alias the "
               "inference server advertises against MODEL_TUNING['models'] keys.")
+
+
+def prune_stale_presets(H: dict, keep: set[str]) -> None:
+    """Delete presets we previously created whose model is no longer served.
+
+    A preset outlives the slot binding that produced it: it is a row in OWUI's
+    database, not a view of the registry. So every model swap leaves the old
+    preset behind, still listed in the picker, still selectable — and it fails at
+    the first message, because its base_model_id names an alias nothing serves.
+    By 2026-08-12 there were four of those against two live ones, which is a
+    demo waiting to go wrong.
+
+    SCOPE IS DELIBERATELY NARROW. Only ids this script is known to have created
+    are candidates: the preset field of every registry entry, plus the ids in
+    MODEL_TUNING["models"]. Anything a human made in the UI is never touched, no
+    matter how dead it looks — guessing wrong here destroys someone's work, and
+    the cost of leaving one stale preset is a confusing picker, not lost data.
+    """
+    reg = load_registry()
+    ours = {e["preset"] for e in (reg or {}).get("downloaded", []) if e.get("preset")}
+    ours |= {m.get("preset_id") for m in MODEL_TUNING["models"].values() if m.get("preset_id")}
+    ours -= keep
+    if not ours:
+        return
+
+    # /api/v1/models/list, NOT /api/v1/models/ — the trailing-slash route collides
+    # with the SPA and returns the HTML shell with a 200, so a naive .json() blows
+    # up rather than 404ing. The router source says so in a comment. Paginated.
+    existing: set[str] = set()
+    for page in range(1, 21):
+        r = requests.get(URL + "/api/v1/models/list", headers=H,
+                         params={"page": page}, timeout=30)
+        if not r.ok:
+            print("WARNING: could not list presets to prune — stale ones may remain")
+            return
+        items = r.json().get("items", [])
+        if not items:
+            break
+        existing |= {m.get("id") for m in items}
+
+    for pid in sorted(ours & existing):
+        d = requests.post(URL + "/api/v1/models/model/delete", headers=H,
+                          json={"id": pid}, timeout=30)
+        if d.ok:
+            print(f"pruned stale preset '{pid}' (its model is not served)")
+        else:
+            print(f"WARNING: could not prune '{pid}': {d.status_code}")
 
 
 if __name__ == "__main__":

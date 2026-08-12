@@ -149,7 +149,7 @@ and the name Open WebUI binds its preset to.
 .B --clear
 Free the slot: unbind it in the registry, delete its
 .IR .env.slot<N> ,
-stop its unit, drop trailing empty slots from
+stop and disable its unit, drop trailing empty slots from
 .BR active[] ,
 and re-bind the Open WebUI presets. This is how you get down to a single
 resident model. See
@@ -199,6 +199,45 @@ then slot 1 \- one at a time, waiting for each to answer
 .I /v1/models
 before starting the next. The script enforces this itself when it can see
 another slot mid-start, but it cannot see a unit you started by hand.
+.SH AUTOSTART AT BOOT
+.B Slot 0 is enabled; slot 1 deliberately is not.
+.PP
+.RS
+.nf
+sudo systemctl enable ragfarm-vllm@0.service     # survives a reboot
+# slot 1 stays disabled -- start it by hand after boot
+sudo systemctl start ragfarm-vllm@1.service
+.fi
+.RE
+.PP
+The asymmetry is not an oversight. Enabling both would have systemd start them
+.B in parallel
+at boot, which is exactly the memory-profiling race described in the next
+section \- and the serialisation that prevents it lives in this script, not in
+the unit. systemd has no way to know that one vLLM instance must finish
+profiling before the next begins.
+.PP
+So the box comes up serving the MoE on slot 0, which is the everyday model, and
+the second model is a deliberate act. If you want both back after a reboot,
+start slot 1 by hand once slot 0 answers
+.IR /v1/models .
+.PP
+.B --clear
+disables the slot as well as stopping it. Otherwise an enabled slot with no
+.I .env.slot<N>
+would come back at the next boot with no model path and no served name, and fail
+on a machine nobody is watching.
+.PP
+This bit for real on 2026-08-12: the box rebooted, both slots were disabled, and
+Open WebUI showed
+.I "No models available"
+with the presets still listed in the workspace but unselectable. Nothing was
+broken \- there was simply nothing serving. The units exit
+.B cleanly
+in that situation
+.RB ( Result=success ,
+status 0, no restarts), which is the signature to look for: a crash leaves a
+non-zero status and a stack trace in the journal.
 .SH WHY SLOTS START SEQUENTIALLY
 vLLM profiles free GPU memory during engine initialisation. If a second instance
 is allocating at the same moment, the first sees free memory move underneath it
