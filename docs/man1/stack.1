@@ -1,0 +1,223 @@
+.TH STACK 1 "2026-08-12" "ragfarm" "ragfarm service lifecycle"
+.SH NAME
+stack.sh \- start, stop and health-check the whole ragfarm stack; the single source of truth for what "the whole stack" is
+.SH SYNOPSIS
+.B scripts/stack.sh
+.RI { start | stop | restart | status | health | list }
+.SH DESCRIPTION
+Thirteen services across two runtimes \- systemd on the host, docker compose in
+containers \- with a start order that matters and two failure modes that return
+HTTP 200 while being broken.
+.B stack.sh
+is the one command that knows all of it.
+.PP
+It is also the
+.B inventory.
+The
+.B SERVICES
+array near the top of the script, plus the vLLM slots read live from the
+registry, is the authoritative list of what this deployment consists of. Adding
+a service means adding one row: the table, the health check, the start order and
+.B list
+all follow from it. Nothing else needs editing, and nothing else should carry a
+second copy of the list.
+.SH SUBCOMMANDS
+.TP
+.B status
+The full picture: the service table, then systemd unit states with their boot
+policy. Read-only, safe at any time. This is the one to run first.
+.TP
+.B health
+The same probes without the systemd section. Exits non-zero if anything required
+is not OK, so it works in a script or a cron check.
+.TP
+.B list
+Print the inventory \- name, kind, unit or container, probe URL \- and exit.
+Probes nothing. Use it to see what
+.B is
+covered before trusting a green run.
+.TP
+.B start
+Host services first, then containers, then wait and report health. vLLM slots
+are started
+.B one at a time,
+each waited for, because two instances profiling GPU memory concurrently kill
+each other \- see
+.BR activate_llm (1)
+\(-> WHY SLOTS START SEQUENTIALLY. Note that
+.B "systemctl start a b c"
+does
+.B not
+serialise, which is why this loops instead.
+.TP
+.B stop
+Containers first, then host services in reverse start order.
+.TP
+.B restart
+.B stop
+then
+.BR start .
+.SH THE STATE COLUMN
+.TP
+.B [OK]
+Probe returned an expected status, and any depth check passed.
+.TP
+.BR [NOT_OK: " \fIcode\fR" ]
+Followed by why, in operator terms: whether anything is listening at all, and
+whether the unit or container behind it is running. Code
+.B 000
+means no listener \- nothing answered the socket.
+.TP
+.B [DEGRADED]
+The service answered correctly and is
+.B still broken.
+See
+.B DEPTH CHECKS
+below. This is the state worth caring about.
+.TP
+.B [OFF]
+Defined in the architecture but deliberately not deployed. Does not count
+against health.
+.B mcp-fs
+is the only one today.
+.TP
+.B [ABSENT]
+The systemd unit is not installed on this machine. Counts as a failure, because
+something in the inventory has no implementation here.
+.SH DEPTH CHECKS
+Two services can return a perfectly good 200 while being useless. Both were live
+on 2026-08-12, and the previous six-endpoint health check reported the stack as
+fully healthy through them.
+.TP
+.B mcpo
+.RI "Route " /rag/openapi.json " answers 200 with " paths: []
+\- the gateway is up and
+.B zero tools are mounted behind it.
+The model then has no
+.BR search_corpus ,
+and every answer that should have been grounded quietly stops being grounded.
+Nothing logs an error. The check counts the mounted paths on
+.I /rag
+and
+.IR /placement ;
+the fix is
+.IR scripts/mcpo-heal.sh ,
+which waits for the MCP backends to accept connections and restarts mcpo once.
+.TP
+.B drawio-viewer
+nginx serves the landing page happily while
+.I js/viewer-static.min.js
+404s, because the 153 MB webapp mirror is gitignored and a fresh clone has only
+the two tracked HTML files. Every in-chat diagram then renders as an empty white
+box with no error anywhere. The check fetches the viewer JS itself; the fix is
+.IR scripts/fetch-drawio-viewer.sh .
+.PP
+The general rule this encodes:
+.B if a 200 can lie, probe the thing the 200 is supposed to promise.
+.SH WHY SOME SERVICES ARE HEALTHY AT 406
+The MCP backends \- rag-retrieval, mcp-placement, mcp-host-control \- speak
+streamable-http. A plain
+.B GET
+on
+.I /mcp
+is answered
+.B "406 Not Acceptable"
+by the application itself, which is proof it is alive and speaking the protocol.
+Insisting on 200 would report every MCP backend as permanently down. Each row
+therefore carries an
+.B allowlist
+of acceptable codes rather than assuming 200.
+.SH SLOTS ARE NOT HARD-CODED
+Which vLLM slots exist comes from
+.B active[]
+in
+.I models/llm/active.json
+at run time, not from a list in this script. Bind a slot with
+.BR activate_llm (1)
+and it appears here automatically, with the model name in
+.BR list ;
+clear one and it stops being reported as missing. The two files cannot drift
+because there is only one list.
+.SH EXAMPLES
+.SS After a reboot, before anything else
+.RS
+.nf
+scripts/stack.sh status
+.fi
+.RE
+.PP
+This is the check that would have saved an hour on 2026-08-12: the box came up
+with the containers running and both vLLM slots down, and Open WebUI reported
+only "No models available".
+.SS Is the stack actually serving, for a script
+.RS
+.nf
+scripts/stack.sh health || echo "stack is degraded"
+.fi
+.RE
+.SS What is even being checked?
+.RS
+.nf
+scripts/stack.sh list
+.fi
+.RE
+.SS Full bring-up on a cold machine
+.RS
+.nf
+scripts/stack.sh start
+.fi
+.RE
+.PP
+Slots come up one at a time and each is waited for, so this is slow by design on
+a cold FlashInfer JIT \- minutes, not seconds, the first time a checkpoint is
+served.
+.SH EXIT STATUS
+.TP
+.B 0
+Everything required is OK.
+.B [OFF]
+services do not count against this.
+.TP
+.B 1
+At least one service is NOT_OK, DEGRADED or ABSENT.
+.TP
+.B 2
+Usage error.
+.SH FILES
+.TP
+.I scripts/stack.sh
+The inventory lives in the
+.B SERVICES
+array at the top. One row per service.
+.TP
+.I models/llm/active.json
+Supplies the vLLM slots. See
+.BR active.json (1).
+.TP
+.I infra/compose.yaml
+The container half of the stack.
+.TP
+.I scripts/mcpo-heal.sh
+Fixes the mcpo boot race that the depth check detects.
+.TP
+.I scripts/fetch-drawio-viewer.sh
+Rehydrates the draw.io mirror that the depth check detects as missing.
+.SH SEE ALSO
+.BR activate_llm (1),
+.BR fetch_llm (1),
+.BR active.json (1),
+.BR env (1),
+.BR setup_openwebui (1)
+.PP
+.I docs/deployment.md
+for the running system;
+.I docs/decisions/ADR-0013
+for the engine split.
+.SH NOTES
+Run as
+.BR dave ,
+never as root.
+.B sudo
+is used only for the specific
+.B systemctl
+operations the lifecycle commands need.

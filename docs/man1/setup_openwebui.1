@@ -1,0 +1,204 @@
+.TH SETUP_OPENWEBUI 1 "2026-08-12" "ragfarm" "ragfarm agent layer"
+.SH NAME
+setup_openwebui.py \- reproducible Open WebUI configuration: model presets, tool servers, prompts
+.SH SYNOPSIS
+.B .venv/bin/python infra/openwebui/setup_openwebui.py
+.RB [ --only-active ]
+.SH DESCRIPTION
+Open WebUI keeps its configuration in a database inside a Docker volume. That
+makes it durable and unreviewable. This script is the
+.B source
+of that configuration: everything the UI needs in order to be useful \- which
+models appear, what system prompt each carries, which tools each may call, what
+sampler it uses \- is declared here and written over the API.
+.PP
+It is idempotent. Run it as often as you like; it converges rather than
+duplicating. It is the reason a fresh Open WebUI volume can be brought back to a
+working state without anyone clicking through the admin panel.
+.PP
+It runs
+.B automatically
+after every
+.BR activate_llm (1)
+activation and every
+.BR --clear .
+You run it by hand when the picker disagrees with reality, after Open WebUI has
+been recreated, or after editing anything in
+.BR MODEL_TUNING .
+.SS What one run does
+.IP 1. 4
+Checks the draw.io viewer is reachable at the baked host and warns if
+.B RAGFARM_PUBLIC_HOST
+was autodetected rather than configured.
+.IP 2. 4
+Registers the mcpo tool servers.
+.IP 3. 4
+Points Open WebUI at every live vLLM slot. This must go through the API, not
+compose: OWUI seeds
+.B OPENAI_API_BASE_URLS
+from the environment on
+.B first start only
+and then persists it, so a compose change alone leaves an existing deployment on
+one endpoint and the second model silently never appears.
+.IP 4. 4
+Installs the
+.B reboot_guarded
+Python tool.
+.IP 5. 4
+Upserts one preset per live slot, from the registry and the tuning table.
+.IP 6. 4
+Prunes presets it previously created whose model is no longer served.
+.SH THE ONE PLACE TO EDIT
+.B MODEL_TUNING
+near the top of the file. It has two halves:
+.TP
+.B models
+Keyed by model
+.B alias
+\- the id the inference server advertises on
+.IR /v1/models .
+Legacy entries; the registry supersedes this for anything added since.
+.TP
+.B profiles
+Keyed by the registry's
+.B profile
+field:
+.B vision-thinking
+and
+.BR vision-instruct .
+Each supplies a prompt body, sampler parameters and a capability matrix. This is
+what a model added by
+.BR fetch_llm (1)
+selects with
+.BR --profile .
+.PP
+Only differences from the
+.BR params_common / caps_common
+blocks belong in an entry. Nothing below the table needs touching to add a model.
+.SH PROMPT BODIES
+.B PROMPT_BODIES
+maps a name to the system prompt text. Three exist:
+.TP
+.B text
+The old text-only preset. Historical.
+.TP
+.B vision
+The current prompt, RULE 0 through RULE 6. Used by
+.BR vision-thinking .
+.TP
+.B vision-legacy
+The July prompt, loaded from
+.IR infra/openwebui/prompts/ .
+Used by
+.B vision-instruct
+since 2026-08-12.
+.PP
+The two vision bodies diverged deliberately. The August prompt work was written
+against and measured on a Thinking checkpoint and nearly doubled the prompt;
+Instruct, which has no reasoning pass to absorb that much instruction, answered
+better on the shorter one.
+.B Consequence:
+Instruct versus Thinking is no longer a single-variable comparison. Point both
+profiles at
+.B vision
+before running any A/B.
+.SH WHY RE-RUNNING IS NOT OPTIONAL
+Presets bind to a model
+.B by alias.
+Change what a slot serves without re-running this, and the preset names an alias
+that no longer exists. The picker then offers only the
+.B raw
+base models \- no system prompt, no tools, no grounding rules. Nothing looks
+broken; the answers are just silently ungrounded. Observed on 2026-08-07 after
+switching both slots from NVFP4 to FP8, which is why
+.BR activate_llm (1)
+now calls this itself.
+.SH PRESET PRUNING
+A preset is a row in Open WebUI's database, not a view of the registry, so every
+model swap leaves the previous one behind \- still listed, still selectable, and
+failing at the first message because its base model is not served. Four had
+accumulated against two live ones by 2026-08-12.
+.PP
+The prune is deliberately narrow. Only ids this script is known to have created
+are candidates: the
+.B preset
+field of every registry entry, plus the
+.B preset_id
+values in
+.BR MODEL_TUNING["models"] .
+A preset made by hand in the UI is
+.B never
+touched, however dead it looks \- guessing wrong there destroys someone's work,
+while leaving a stale preset only makes the picker confusing.
+.SH ENVIRONMENT
+.TP
+.B OWUI_URL
+Default
+.IR http://127.0.0.1:3000 .
+.TP
+.BR OWUI_TOKEN " | " OWUI_EMAIL " + " OWUI_PASSWORD
+Admin credentials. One or the other is required; the script exits immediately
+without them. Both live in
+.IR .env ,
+so
+.B "source scripts/proxy-env.sh"
+first.
+.TP
+.B RAGFARM_PUBLIC_HOST
+Baked into the draw.io wrapper in RULE 5 \- the one place in the system where
+127.0.0.1 is wrong, because a remote browser fetches it. See
+.BR env (1).
+.TP
+.BR MCPO_RAG_URL ", " MCPO_PLACEMENT_URL
+Tool server endpoints.
+.TP
+.BR TEXT_BASE_MODEL_ID ", " VISION_BASE_MODEL_ID
+Optional pins that force an alias instead of autodetecting from
+.IR /v1/models .
+.SH OPTIONS
+.TP
+.B --only-active
+Write just the preset for the currently served model, rather than one per slot.
+.SH EXAMPLES
+.SS Normal use
+.RS
+.nf
+source scripts/proxy-env.sh
+\&.venv/bin/python infra/openwebui/setup_openwebui.py
+.fi
+.RE
+.SS The picker is empty or a preset says "Model not found"
+Usually means the slot was not serving when the preset was written, or the model
+is genuinely down. Check the stack first, then re-run:
+.RS
+.nf
+scripts/stack.sh status
+source scripts/proxy-env.sh
+\&.venv/bin/python infra/openwebui/setup_openwebui.py
+.fi
+.RE
+.SH FILES
+.TP
+.I infra/openwebui/setup_openwebui.py
+The script, and the tuning table inside it.
+.TP
+.I infra/openwebui/prompts/
+Prompt bodies kept as files rather than Python literals.
+.TP
+.I infra/openwebui/tools/reboot_guarded.py
+The confirmation-gated reboot tool.
+.TP
+.I models/llm/active.json
+Supplies identity: alias, preset id, display name, profile. See
+.BR active.json (1).
+.SH SEE ALSO
+.BR activate_llm (1),
+.BR stack (1),
+.BR active.json (1),
+.BR fetch_llm (1),
+.BR env (1)
+.PP
+.I docs/decisions/ADR-0003
+for the agent layer;
+.I docs/deployment.md
+for the demo surface these presets expose.
