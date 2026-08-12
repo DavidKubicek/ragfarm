@@ -255,11 +255,17 @@ MODEL_TUNING = {
             "capabilities": {"vision": True, "file_context": False},
         },
         "vision-instruct": {
-            # Same system prompt as vision-thinking, deliberately: nothing in
-            # RULE 0-6 depends on whether the model emits a <think> block, and
-            # keeping them identical is what makes Instruct-vs-Thinking a clean
-            # single-variable comparison.
-            "prompt": "vision",
+            # NOT the same prompt as vision-thinking any more (2026-08-12). The
+            # August rewrite — k= calibration, the RULE 3 split, the
+            # anti-narration clauses — was written against and measured on a
+            # Thinking checkpoint, and took the body from 7,315 to 13,036 chars.
+            # Instruct has no reasoning pass to absorb that, and answered better
+            # on the shorter July prompt, so it keeps that one.
+            #
+            # The cost is that Instruct-vs-Thinking is no longer a clean
+            # single-variable comparison: it now differs in prompt as well as
+            # checkpoint. Point both at "vision" before running any A/B.
+            "prompt": "vision-legacy",
             "params": {
                 # Qwen's recommended sampling for the INSTRUCT checkpoint, which
                 # is not the same as Thinking's 0.6/0.95. This profile carried
@@ -585,9 +591,27 @@ VISION_GROUNDING_SYSTEM = (
 # scripts/trace_tool_calls.py import GROUNDING_SYSTEM by name — do not rename),
 # and MODEL_TUNING selects between them by key. Prose lives below, knobs live at
 # the top; that is the split.
+def _load_prompt(name: str) -> str:
+    """Read a prompt body kept as a file rather than a Python literal.
+
+    Only the legacy body uses this. It is 10 kB of restored text that nobody
+    should be editing inline, and holding it as a file keeps its provenance
+    obvious and its diff readable. Leading '#' comment lines up to the first
+    blank line are the file's own header and are not part of the prompt.
+    """
+    raw = (Path(__file__).parent / "prompts" / name).read_text()
+    head, _, body = raw.partition("\n\n")
+    return body if all(l.startswith("#") for l in head.splitlines() if l.strip()) else raw
+
+
 PROMPT_BODIES = {
     "text": GROUNDING_SYSTEM,
     "vision": VISION_GROUNDING_SYSTEM,
+    # Instruct runs the July prompt. The August rewrite was measured on a
+    # Thinking checkpoint and nearly doubled the prompt; without a reasoning
+    # pass to absorb that much instruction, Instruct answered better on the
+    # shorter one. RULE 5 is spliced from the current body — see the file header.
+    "vision-legacy": _load_prompt("vision-legacy-2026-07-31.txt"),
 }
 
 
