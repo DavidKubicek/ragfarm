@@ -247,7 +247,7 @@ MODEL_TUNING = {
                 # NOT a long follow-up thread. Start a fresh chat for big diagram
                 # conversions. Raising this further means raising --max-model-len,
                 # which costs KV cache (~96 KiB/token) and a slot restart.
-                "max_tokens": 24576,
+                "max_tokens": 8192,
             },
             # file_context OFF: OWUI prepends `<attached_files>...` as TEXT in
             # ADDITION to routing image bytes through the vision encoder, and that
@@ -280,7 +280,7 @@ MODEL_TUNING = {
                 # edges for a source that has ~26, most of them duplicates. More
                 # budget buys more loop, and presence_penalty does not break it.
                 # The failure is on the edge half of the task, not the node half.
-                "max_tokens": 24576,
+                "max_tokens": 8192,
             },
             "capabilities": {"vision": True, "file_context": False},
         },
