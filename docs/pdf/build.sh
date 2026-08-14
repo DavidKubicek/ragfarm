@@ -2,16 +2,15 @@
 # docs/pdf/build.sh — concatenate every canonical repo doc into one PDF via pandoc+typst.
 #
 # Chapter order (matches 00-introduction.md's roadmap):
-#   1  Introduction               (docs/pdf/00-introduction.md — the only doc unique to this bundle)
-#   2  Project README             (README.md — architectural summary + 9 chat-example screenshots)
-#   3  Deployment guide           (docs/deployment.md)
-#   4  Prompt library             (docs/prompts.md — board demo reference)
-#   5  Ingestion pipeline         (docs/ingestion-pipeline.md)
-#   6  Component READMEs          (infra/embedder + infra/llama)
-#   7  Configuration reference    (.env.example)
-#   8  Model records              (models/llm + embeddings + reranker)
-#   9  Instrumentation & tracing  (tests/tracing/*.md — seven files)
-#   10 Build progress             (PROGRESS.md — appears last; is the current op-status ledger)
+#   1-4   Introduction, README, vision demos, hardware ladder
+#   5-6   Deployment guide, then the LLM life-cycle (slots, registry, stack.sh)
+#   7-8   Prompt library, then how it is used as a regression suite
+#   9-10  Ingestion pipeline, component READMEs
+#   11-12 Configuration reference, model records
+#   13    Instrumentation and tracing (ONE chapter as of 2026-08-14; it was seven
+#         files documenting the retired llama.cpp/AMD stack — consolidated, and
+#         the originals are in git history)
+#   14    Build progress (PROGRESS.md — the current op-status ledger, last)
 #
 # Requires pandoc + typst on PATH (both installed to ~/.local/bin/ by
 # scripts/fetch-drawio-viewer.sh's cousin — or manually per install notes).
@@ -31,22 +30,18 @@ CHAPTERS=(
   "3  Qwen3-VL vision demonstrations|docs/pdf/01-vision-demonstrations.md"
   "4  Hardware requirements (dev + prod ladder)|docs/pdf/02-hardware-requirements.md"
   "5  Deployment guide|docs/deployment.md"
-  "6  Prompt library|docs/prompts.md"
-  "7  Ingestion pipeline|docs/ingestion-pipeline.md"
-  "8a Embedder README|infra/embedder/README.md"
-  "8b llama.cpp README|infra/llama/README.md"
-  "9  Configuration reference (.env.example)|.env.example"
-  "10a Model record — LLM|models/llm/MODEL.md"
-  "10b Model record — embedder|models/embeddings/MODEL.md"
-  "10c Model record — reranker|models/reranker/MODEL.md"
-  "11a Instrumentation — README|tests/tracing/README_INSTRUMENTATION.md"
-  "11b Instrumentation — full guide|tests/tracing/INSTRUMENTATION_GUIDE.md"
-  "11c Tracer integration guide|tests/tracing/TRACER_INTEGRATION_GUIDE.md"
-  "11d RAG pipeline setup notes|tests/tracing/RAG_PIPELINE_SETUP.md"
-  "11e Quick reference — instrumentation|tests/tracing/QUICK_REFERENCE.md"
-  "11f Quick reference — context diagnosis|tests/tracing/QUICK_REFERENCE_CONTEXT_DIAGNOSIS.md"
-  "11g Context blowup diagnosis guide|tests/tracing/CONTEXT_DIAGNOSIS_GUIDE.md"
-  "12 Build progress (PROGRESS.md)|PROGRESS.md"
+  "6  LLM life-cycle — models, slots, running the stack|docs/llm-lifecycle.md"
+  "7  Prompt library and regression suite|docs/prompts.md"
+  "8  Prompt regression testing|docs/regression-testing.md"
+  "9  Ingestion pipeline|docs/ingestion-pipeline.md"
+  "10a Embedder README|infra/embedder/README.md"
+  "10b llama.cpp (reranker engine)|infra/llama/README.md"
+  "11 Configuration reference (.env.example)|.env.example"
+  "12a Model record — LLM|models/llm/MODEL.md"
+  "12b Model record — embedder|models/embeddings/MODEL.md"
+  "12c Model record — reranker|models/reranker/MODEL.md"
+  "13 Instrumentation and tracing|tests/tracing/README.md"
+  "14 Build progress (PROGRESS.md)|PROGRESS.md"
 )
 
 # Concatenate — each chapter gets a top-level heading of the form
