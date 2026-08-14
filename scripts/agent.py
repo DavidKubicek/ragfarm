@@ -61,8 +61,67 @@ MOUNTS   = os.environ.get("MOUNTS", "rag,placement").split(",")   # read tools; 
 CTX_BUDGET = int(os.environ.get("CTX_BUDGET", "12000"))           # elide old tool bodies past this
 DEBUG = False                                                     # --debug: dump raw llama responses
 
-# Deterministic sampler, mirroring the deployed model preset (ADR-0007 §3).
-DET = {"temperature": 0, "top_k": 1, "top_p": 0, "min_p": 0, "seed": 42, "stream": False}
+# Deterministic sampler (ADR-0007 §3). top_p is 1, NOT 0: llama.cpp read 0 as
+# "disabled", vLLM validates it as a probability and rejects the request with
+# `top_p must be in (0, 1], got 0.0`. This harness was written against llama.cpp
+# and silently 400'd on every call after ADR-0013 moved generation to vLLM —
+# nobody noticed because nothing ran it until the regression suite did.
+# temperature 0 is what makes it greedy; the rest is belt and braces.
+DET = {"temperature": 0, "top_k": 1, "top_p": 1, "min_p": 0, "seed": 42, "stream": False}
+
+# SAMPLER is what llama() actually sends. It starts deterministic — the right
+# default for a debugging harness, where a reproducible run is the whole point —
+# and is REPLACED wholesale by --owui-preset, because mimicking Open WebUI means
+# mimicking its non-greedy sampler too. Merging the two would produce a sampler
+# that exists nowhere: temperature 0.6 with top_k 1 is not "OWUI but calmer", it
+# is greedy decode wearing OWUI's temperature.
+SAMPLER = dict(DET)
+LOG_FH = None  # --log: an open file handle; every prompt and answer is appended
+
+
+def logline(*parts) -> None:
+    """Detail goes to the log file, summaries go to stdout. Callers should not
+    have to care whether logging is on."""
+    if LOG_FH:
+        LOG_FH.write(" ".join(str(p) for p in parts).rstrip() + "\n")
+        LOG_FH.flush()
+
+
+def owui_preset(preset_id=None, alias=None):
+    """-> (system_prompt, sampler_params) exactly as Open WebUI would send them.
+
+    Read from setup_openwebui rather than restated here. The regression suite is
+    worthless if the harness drifts from the deployment it is supposed to be
+    testing, and a second copy of the sampler values is precisely how that drift
+    starts. If the preset changes, this follows on the next run.
+    """
+    sys.path.insert(0, str(REPO / "infra" / "openwebui"))
+    import setup_openwebui as owui
+
+    reg = owui.load_registry() or {}
+    entry = None
+    for e in reg.get("downloaded", []):
+        if preset_id and e.get("preset") == preset_id:
+            entry = e
+            break
+        if alias and e.get("alias") == alias:
+            entry = e
+            break
+    if entry is None:
+        raise SystemExit(
+            f"no registry entry for preset={preset_id!r} alias={alias!r}.\n"
+            f"  known presets: {', '.join(e['preset'] for e in reg.get('downloaded', []))}")
+
+    prof = owui.MODEL_TUNING["profiles"][entry["profile"]]
+    params = dict(owui.MODEL_TUNING["params_common"])
+    params.update(prof["params"])
+    # Keep only what a raw /v1/chat/completions accepts; the rest of the preset
+    # (function_calling mode, stream_delta_chunk_size, mmap flags…) is Open WebUI
+    # plumbing that the API would reject or ignore.
+    sampler = {k: v for k, v in params.items()
+               if k in ("temperature", "top_p", "top_k", "max_tokens")}
+    sampler["stream"] = False
+    return owui.PROMPT_BODIES[prof["prompt"]], sampler, entry
 
 # Built-in scenarios. reboot-canary reproduces the boss's OWUI test: reboot works
 # early, then several RAG turns bloat context, then reboot AGAIN — the turn where
@@ -241,7 +300,13 @@ def bound_context(messages, last_prompt_tokens, budget, keep_recent_tools=4):
 # Agent loop
 # --------------------------------------------------------------------------- #
 def llama(messages, tools):
-    body = {"model": MODEL, "messages": messages, "tools": tools, "tool_choice": "auto", **DET}
+    body = {"model": MODEL, "messages": messages, **SAMPLER}
+    # tool_choice must be absent, not "auto", when there are no tools: some
+    # servers reject the pair. The comparator runs with --no-tools precisely so
+    # the judge cannot go and look things up instead of judging.
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
     t0 = time.time()
     r = requests.post(f"{LLM_URL}/v1/chat/completions", json=body, timeout=300)
     r.raise_for_status()
@@ -346,27 +411,50 @@ def _fmt_row(m, n=0, expect=None, elided=0):
 # --------------------------------------------------------------------------- #
 # Entry points
 # --------------------------------------------------------------------------- #
-def build(system_none):
-    tools, registry = load_tools()
+def build(args):
+    """-> (tools, registry, messages). Resolves which system prompt and which
+    sampler this run uses, in precedence order: --system-file, then
+    --owui-preset, then the legacy built-in, then none."""
+    global SAMPLER, MODEL
+    tools, registry = ([], {}) if getattr(args, "no_tools", False) else load_tools()
     names = [t["function"]["name"] for t in tools]
-    system = None
-    if not system_none:
+    system, source = None, "none"
+
+    if getattr(args, "system_file", None):
+        system = pathlib.Path(args.system_file).read_text()
+        source = f"file:{args.system_file}"
+    elif getattr(args, "owui_preset", None) or getattr(args, "owui_alias", None):
+        system, sampler, entry = owui_preset(args.owui_preset, args.owui_alias)
+        SAMPLER = sampler
+        MODEL = args.model or entry["alias"]
+        source = f"owui-preset:{entry['preset']}"
+    elif not args.no_system:
         sys.path.insert(0, str(REPO / "infra" / "openwebui"))
         try:
             import setup_openwebui
             system = setup_openwebui.GROUNDING_SYSTEM
+            source = "builtin:GROUNDING_SYSTEM"
         except Exception as e:
             print(f"  ! no grounding prompt ({e}); running without one", file=sys.stderr)
+
+    for k, flag in (("temperature", "temp"), ("top_p", "top_p"),
+                    ("top_k", "top_k"), ("max_tokens", "max_tokens")):
+        v = getattr(args, flag, None)
+        if v is not None:
+            SAMPLER[k] = v
+
     messages = [{"role": "system", "content": system}] if system else []
-    print(f"model={MODEL}  tools={names}  ctx_budget={CTX_BUDGET}  "
-          f"system={'yes' if system else 'NONE'}\n")
+    banner = (f"model={MODEL}  url={LLM_URL}  tools={names or 'NONE'}  "
+              f"system={source}  sampler={ {k: v for k, v in SAMPLER.items() if k != 'stream'} }")
+    print(banner + "\n")
+    logline("###", banner)
     return tools, registry, messages
 
 
 def run_scenario(name, args):
     if name not in SCENARIOS:
         sys.exit(f"unknown scenario {name!r}; have: {', '.join(SCENARIOS)}")
-    tools, registry, messages = build(args.no_system)
+    tools, registry, messages = build(args)
     print(f"=== scenario: {name} ===")
     rows, fails = [], 0
     for n, (prompt, expect) in enumerate(SCENARIOS[name], 1):
@@ -390,21 +478,36 @@ def run_scenario(name, args):
 
 
 def run_prompts(prompts, args):
-    tools, registry, messages = build(args.no_system)
+    tools, registry, messages = build(args)
     for p in prompts:
+        # Each one-shot prompt is its OWN conversation when emitting JSON. A
+        # regression case must not be able to pass because a previous case left
+        # the answer sitting in the history.
+        if args.json:
+            messages = [m for m in messages[:1] if m["role"] == "system"]
         messages.append({"role": "user", "content": p})
-        print(f"\n> {p}")
+        logline(f"\n>>> PROMPT\n{p}")
+        if not args.json:
+            print(f"\n> {p}")
         m = run_turn(messages, tools, registry, args.yes)
         messages.append({"role": "assistant", "content": m["answer"]})
         elided = bound_context(messages, m["prompt_tokens"], CTX_BUDGET)
-        for line in render_steps(m["steps"]):
-            print(line)
-        print(f"< {m['answer']}")
-        print("   ", _fmt_row(m, elided=elided))
+        logline(f"<<< ANSWER (tools={m['called']})\n{m['answer']}")
+        if args.json:
+            print(json.dumps({
+                "prompt": p, "answer": m["answer"], "tools_called": m["called"],
+                "prompt_tokens": m["prompt_tokens"], "wall_s": round(m["wall_s"], 2),
+                "model": MODEL,
+            }, ensure_ascii=False))
+        else:
+            for line in render_steps(m["steps"]):
+                print(line)
+            print(f"< {m['answer']}")
+            print("   ", _fmt_row(m, elided=elided))
 
 
 def run_repl(args):
-    tools, registry, messages = build(args.no_system)
+    tools, registry, messages = build(args)
     print("interactive agent — Ctrl-D or /quit to exit, /reset to clear history\n")
     while True:
         try:
@@ -439,10 +542,44 @@ def main():
     ap.add_argument("--no-system", action="store_true", help="send no grounding system prompt")
     ap.add_argument("--show-tools", action="store_true", help="print loaded tool names + exit")
     ap.add_argument("--debug", action="store_true", help="dump raw llama responses (finish_reason, tool_calls, content)")
+
+    g = ap.add_argument_group("system prompt (first match wins)")
+    g.add_argument("--system-file", metavar="PATH",
+                   help="use this file as the system prompt verbatim")
+    g.add_argument("--owui-preset", metavar="ID",
+                   help="mimic an Open WebUI preset exactly: its prompt AND its sampler "
+                        "(e.g. ragfarm-vision-fp8)")
+    g.add_argument("--owui-alias", metavar="ALIAS",
+                   help="same, selected by served alias instead of preset id")
+
+    g = ap.add_argument_group("model and sampler overrides")
+    g.add_argument("--model", help="served model name (default: $MODEL, or the preset's alias)")
+    g.add_argument("--url", help="LLM base URL (default: $LLM_URL)")
+    g.add_argument("--temp", type=float)
+    g.add_argument("--top-p", type=float, dest="top_p")
+    g.add_argument("--top-k", type=int, dest="top_k")
+    g.add_argument("--max-tokens", type=int, dest="max_tokens")
+    g.add_argument("--no-tools", action="store_true",
+                   help="load no tools at all — for jobs that must reason over given "
+                        "text rather than go looking (see the comparator)")
+
+    g = ap.add_argument_group("output")
+    g.add_argument("--log", metavar="PATH", help="append full prompts, answers and timings here")
+    g.add_argument("--json", action="store_true",
+                   help="with one-shot prompts: emit one JSON object per prompt on stdout")
     args = ap.parse_args()
 
-    global DEBUG
+    global DEBUG, MODEL, LLM_URL, LOG_FH
     DEBUG = args.debug
+    if args.model:
+        MODEL = args.model
+    if args.url:
+        LLM_URL = args.url.rstrip("/")
+    if args.log:
+        pathlib.Path(args.log).parent.mkdir(parents=True, exist_ok=True)
+        LOG_FH = open(args.log, "a")
+        logline(f"\n===== {datetime.now(timezone.utc).isoformat()} "
+                f"argv={' '.join(sys.argv[1:])}")
 
     if args.show_tools:
         tools, _ = load_tools()
