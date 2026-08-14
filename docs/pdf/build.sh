@@ -139,8 +139,9 @@ pandoc "$MASTER" \
   --to=pdf \
   --pdf-engine=typst \
   --toc --toc-depth=2 \
-  --syntax-highlighting=tango \
+  --highlight-style=tango \
   --resource-path="$REPO_ROOT:$REPO_ROOT/docs:$REPO_ROOT/assets" \
+  --pdf-engine-opt=--root --pdf-engine-opt=/ \
   -o "$OUT"
 
 echo "  OK  $OUT ($(du -h "$OUT" | cut -f1))"
