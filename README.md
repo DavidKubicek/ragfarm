@@ -99,21 +99,18 @@ placement the same stage took **36 seconds**.
 
 ## Diagrams
 
-### Runtime component inventory
+Both are generated from typst sources in [`assets/src/`](assets/src/) — edit the
+source and run `assets/src/build.sh`. The four previous diagrams were PNGs with
+no source; when generation moved from llama.cpp to vLLM they became wrong and
+nobody could fix them.
 
-![Runtime component inventory](./assets/ragfarm_runtime_component_inventory.png)
+### Service topology
 
-### Query-time control flow
+![13 services across host systemd and docker compose, with ports and runtime](./assets/ragfarm_service-topology.png)
 
-![Query-time control flow — 13 numbered steps, per-stage timings](./assets/ragfarm_query_time_retrieval_path.png)
+### Query-time retrieval path
 
-### Systemd unit topology (host services)
-
-![Systemd unit topology — llama, reranker, embedder, ingester-watcher, stack](./assets/ragfarm_systemd_service_topology.png)
-
-### Container network topology (infra/compose.yaml)
-
-![Container network topology — host-network vs bridge groups, ports, volumes](./assets/ragfarm_container_network_topology.png)
+![Seven stages from query embedding to verbatim text, with measured per-stage timings](./assets/ragfarm_retrieval-path.png)
 
 ## Working chat examples (verified in OWUI)
 
@@ -126,9 +123,7 @@ unedited.
 > the source of the R1-R6 cases in
 > [`docs/prompts.md`](docs/prompts.md) — but they are **not** a record of the
 > current models. Re-running them against today's stack is what
-> `scripts/test_regressions.py` is for. The same caveat applies to the systemd
-> diagram above, which still shows `ragfarm-llama` where the deployment now runs
-> `ragfarm-vllm@N`.
+> `scripts/test_regressions.py` is for.
 
 ### 1. Firewall rules for a specific host (RAG → structured table)
 
