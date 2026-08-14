@@ -206,25 +206,39 @@ the right answer rather than a single record.
 CutOver
 ~~~
 
-### R8 · Honest miss on an out-of-corpus question
+### R8 · General knowledge is answered directly
 
-- **tags:** rag, czech, negative
-- **tools:** search_corpus
-- **status:** verified 2026-07-27 (text preset, screenshot ex-07)
+- **tags:** general, czech, negative
+- **status:** rewritten 2026-08-14 — the July expectation (route everything through search_corpus) contradicts today's RULE 0 carve-out
 
 ~~~prompt
 Kdo je prezident USA?
 ~~~
 
 ~~~expect
-Calls search_corpus anyway, finds nothing relevant, and says plainly that the
-corpus contains no such information. It may note which names DO appear while
-making clear they are not presidents. The required behaviour is the honest miss:
-absolutely no answer from world knowledge, no invented name.
+Answers directly from the model's own knowledge and does NOT call search_corpus:
+RULE 0 makes general-knowledge questions tool-forbidden, and the corpus has
+nothing to say about US presidents. Names the president its training data knows
+(Joe Biden for the Qwen3-VL generation) and may add that its knowledge has a
+cutoff. What must not happen is a corpus lookup, a claim that the corpus contains
+the answer, or a refusal to answer at all.
 ~~~
 
-~~~must-not
-Trump
+### R9 · Honest miss inside the corpus domain
+
+- **tags:** rag, czech, negative
+- **tools:** search_corpus
+- **status:** new 2026-08-14, unverified — replaces the anti-hallucination half of the old R8
+
+~~~prompt
+Co víš o hostu zzql-nonexistent-42?
+~~~
+
+~~~expect
+This IS a corpus question, so it calls search_corpus. Finding nothing for that
+host, it says plainly that the corpus contains no such host. It must not invent
+an IP address, VLAN, owner or any other field, and must not silently answer about
+a different host whose name merely looks similar.
 ~~~
 
 ---
