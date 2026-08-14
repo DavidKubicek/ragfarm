@@ -1,212 +1,533 @@
-# Board demo — prompt library, verified live
+# Prompt library — demo reference and regression suite
 
-**Author:** David Kubicek (kubicek@gmail.com)  **Last verified:** 2026-07-27
-**Live model at verification time:** `Qwen3-VL-8B-Thinking` Q4_K_M — non-greedy sampler (temp 0.6, no top_k/top_p/min_p — Qwen3-VL Thinking's own requirement).
-**Stack:** llama.cpp / Vulkan on Radeon 890M iGPU (LPDDR5x-shared UMA). Retrieval: BGE-M3 dense+sparse → RRF → bge-reranker-v2-m3 on iGPU. Tools: rag/placement/reboot via mcpo (`:8000`).
+This file has two jobs and one format.
 
-**How to use this file at the board:**
-- **Section A** is the historical text preset (Qwen2.5-7B, greedy) — what we've been demoing for weeks with screenshots to prove it. Kept verbatim as a *fallback deck* if the VL preset misbehaves live: `scripts/activate-llm.sh --dir qwen2.5-7b-instruct-gguf` swaps back in ~30 s (the script auto-restarts the service).
-- **Section B** is tomorrow's live preset (Qwen3-VL-8B-Thinking) — every prompt fired against the live stack today; observed outputs are literal, taken from `scratchpad/prompts_results.json`.
-- **Section C** is the honest technical caveat about `<think>`/`<no_think>` for board Q&A.
-- **Section D** is the speed reality-check and the dGPU pitch.
+**For a human** it is the demo script: what to ask, what a good answer looks
+like, and which of those answers has actually been seen rather than hoped for.
 
-The **exact prompt strings** are the primary artifact — copy/paste them verbatim tomorrow. If you're improvising, keep the same shape.
+**For a machine** it is the regression suite. `tests/promptlib.py` parses every
+case out of it, `scripts/test_regressions.py` replays them against the live slot
+and an LLM judge decides whether today's answer still achieves what the
+`expect` block describes. One file, so the demo script and the tests cannot
+drift apart.
 
----
+## How to add a case
 
-## Section A — Text preset (Qwen2.5-7B Q4_K_M, greedy) — historical, screenshot-verified
+Copy the shape below. Only the heading, `~~~prompt` and `~~~expect` are
+required.
 
-Prompts we've been demoing for weeks. Each has a screenshot embedded in the [main README](../README.md#working-chat-examples-verified-in-owui) that shows exactly what the answer looks like in-chat. Not re-verified on the VL model today — swap back with:
+    ### X1 · short title
+
+    - **tags:** rag, czech
+    - **tools:** search_corpus
+    - **status:** unverified
+
+    ~~~prompt
+    The prompt, verbatim, exactly as a user would type it.
+    ~~~
+
+    ~~~expect
+    What a correct answer must achieve, in prose.
+    ~~~
+
+    ~~~must
+    a-substring-that-must-appear
+    ~~~
+
+Rules worth knowing before you write one:
+
+- **Fences are tildes**, not backticks, so a prompt or expectation can itself
+  contain ```` ``` ```` blocks. The draw.io and code cases do.
+- **`expect` is prose, never a golden string.** Sampling is non-greedy, so two
+  correct answers differ in wording every run. Describe what the answer must
+  *achieve*; the judge decides whether it did. A literal diff would fail every
+  time and everyone would learn to ignore the suite.
+- **`must` / `must-not` are for the deterministic part** — a hostname, an
+  identifier, a figure. They are checked by plain string match before any model
+  is called, because a cheap check that can fail hard should not be delegated to
+  a judge.
+- **`status:` is a claim about evidence.** Say which model and which date, or
+  say `unverified`. Several cases below are verified only on models we no longer
+  run; that is recorded rather than hidden.
+- `skip:` with a reason keeps a case in the library but out of the run.
+
+Validate after editing:
 
 ```bash
-scripts/activate-llm.sh --dir qwen2.5-7b-instruct-gguf
-# auto-restart; ~30-60 s to reload
+.venv/bin/python tests/promptlib.py --validate
 ```
 
-### A1 · RAG lookups (Czech unless noted) — see README screenshots
-
-| # | Prompt (Czech) | What the model does | Screenshot |
-|---|---|---|---|
-| 1 | `Jaká jsou FW pravidla pro host leadb229p.lea.piz?` | calls `search_corpus`, returns a **full 6-row markdown table** with every column: Source/Destination Network Address(es), Source/Destination Network Name(s), Destination Port(s), Protocol. Ends with `Source: <xlsx>`. | ex-01 |
-| 2 | `Dej mi kontakty na projektove vedeni v EPC.` | calls `search_corpus`, returns **6 people** as a numbered list with Firma / Role/oblast / Tel / E-mail for each (phone missing only where truly absent in source). | ex-02 |
-| 3 | `Co vis o hostu acclcass1?` | calls `search_corpus`, returns **19 fields** for that specific host: Prostředí, OS, Virtualizace, Storage, vCPU, RAM, HDD, Support, T-S Hostname, T-S IP, T-S Netmask, SA Hostname, SA domain suffix, SA IP, SA Netmask, SA VLAN ID, Storage OS/App+Data, filesystem, UID. | ex-03 |
-| 4 | `Kde ukládáme hesla pro EPC?` | calls `search_corpus`, explains NordPass storage + which record ("RDP User") to look up + how to use it with the RDP client. | ex-04 |
-| 5 | `Kde máme uložené GIT repo s dokumentací?` | returns the exact Azure DevOps URL: `https://SGC-DevOps@dev.azure.com/SGC-DevOps/Internal/_git/sa-hosting`. | ex-05 |
-| 6 | `Jak se přihlásím ze ŠA do EPC?` | comprehensive answer: **6 numbered login paths** (SSH direct, RDP direct, terminal servers, GUI, reverse proxy, CLI) with hostnames, IPs, credentials source, and pointers to `EPC25_VMs_config.xlsx` / `SA_Hosting_infra_VMs.xlsx`. | ex-06 |
-
-### A2 · Infra tools — mcp-placement (MOCK) + human-gated reboot
-
-| # | Prompt | Tool called | What happens |
-|---|---|---|---|
-| 7 | `Kolik je hodin?` | `get_current_timestamp` | one-line reply: `Nyní je HH:MM (GMT+2).` | ex-07 |
-| 8 | `Kdo je prezident USA?` | `search_corpus` (RAG fires even on out-of-corpus, per RULE 1) | honest miss: `V dokumentu není zmíněn žádný prezident USA. Zde jsou některá jména zapsaná v dokumentu, ale nejsou to prezidenti USA.` **This is the desired behavior** — no hallucination. | ex-07 |
-| 9 | `Rebootuj host node-03.` | `reboot_host` (behind `reboot_guarded` confirmation modal) | on approval: `Host node-03 byl úspěšně restartován. Než byl host restartován, bylo přesunuto 1 virtuálního počítače (sftp-gw). Po restartu se host opět připojil k clusteru.` | ex-07 |
-
-### A3 · Diagrams (mermaid) — rendered in-chat by OWUI
-
-| # | Prompt | Output |
-|---|---|---|
-| 10 | `Vygeneruj stromový diagram slovních vazeb ve větě: "Once upon a time there was a very little dog called Steven who owned a nice little yellow car".` | full mermaid dependency tree, branching (not a linear reading chain) — `dog` is a hub with `a`, `very`, `little`, `called Steven` as children; `owned` branches off `who`; second `a` hub for `car`. | ex-08 |
-
-### A4 · Coding — built-in `execute_code` interpreter
-
-| # | Prompt | What happens |
-|---|---|---|
-| 11 | `Vygeneruj mi kód pro quicksort a otestuj ho spuštěním nad malým polem náhodných řetězců. Prezentuj kód a výsledné pořadí tříděného pole po běhu sortu.` | model emits complete Python (`quicksort`, `random.choices`, `random.shuffle`), OWUI's code interpreter runs it, then the sorted-strings table is rendered inline as a data grid. | ex-09 |
+Metadata keys: `preset`, `slot`, `tools`, `attach`, `status`, `tags`, `skip`.
 
 ---
 
-## Section B — Vision preset (Qwen3-VL-8B-Thinking) — TOMORROW'S DEMO
+## Section R — Retrieval and grounding
 
-Every prompt below was fired against the live stack on 2026-07-27 via `scratchpad/verify_prompts.py`. Observed outputs are literal (from `scratchpad/prompts_results.json`). The model is non-greedy so future runs will differ in wording; the *shape* of the answer is what to trust.
+The core of the product. Every case here must call `search_corpus` and answer
+only from what comes back.
 
-**Delivery advice:**
-- Start with a **B3 OCR** prompt — receipt or Chinese/Farsi. This is the WOW block: same tokens rate as the old text model, but suddenly *reads images*. Sell this hard: it's what unlocks the dGPU pitch.
-- Move into **B4 structure extraction** — bar chart → table, hand-drawn diagram → mermaid, code photo → runnable Python. Same story: eyes+brain replacing manual transcription.
-- Close with a **B2 diagram** — mermaid or draw.io — the latter renders in-chat as an interactive canvas via our local `viewer.diagrams.net` mirror.
-- If a text/RAG query is needed live, use one from Section A verbatim; the vision preset shares the same `search_corpus` tool.
+> **Provenance warning.** R1-R6 were verified on 2026-07-27 against the
+> *retired* text preset (Qwen2.5-7B Q4_K_M, greedy) and have README screenshots.
+> They were not re-verified on the current 30B models except where the status
+> line says so. That is exactly the drift this suite exists to catch.
 
-### B3 · Image OCR — verbatim + translation
+### R1 · FW rules for one specific host
 
-**B3a — Real-world receipt (Indonesian, Auntie Anne's, 310 KB PNG)** — 77 s, 613 out tokens, decode 8.1 tok/s
-Prompt: `Read all the text in this image. Preserve the original numbers and layout.`
-Verbatim response:
-```
-AuntieAnne's
+- **tags:** rag, czech, table
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-01); tool call re-verified 4/4 on 30B-A3B Instruct 2026-08-12
 
-CINNAMON SUGAR
-1 x 17,000
-17,000
+~~~prompt
+Jaká jsou FW pravidla pro host leadb229p.lea.piz?
+~~~
 
-SUB TOTAL
-17,000
+~~~expect
+Calls search_corpus, then returns the firewall rules for that one host as a
+markdown table with every column present: source and destination network
+addresses, source and destination network names, destination ports, protocol.
+Around six rows. Ends with a Source: line naming the xlsx it came from. Does not
+dump rules for other hosts.
+~~~
 
-GRAND TOTAL
-17,000
+~~~must
+leadb229p
+~~~
 
-CASH IDR
-20,000
+### R2 · Contacts for project management
 
-CHANGE DUE
-3,000
-```
+- **tags:** rag, czech, list
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-02)
 
-**B3b — Mixed English + Czech + IP addresses + floats** — 59 s, 462 out tokens
-Prompt: `OCR every visible line. Keep punctuation, numbers, and IP addresses exact.`
-Verbatim response:
-```
-ragfarm - firewall rules 2026
-Source: 10.244.1.26 -> Target: 172.20.220.0/24
-Port: 445/tcp  Owner: petr.pyszko@epc.cz
-Ceske znaky: prihlaseni, zaloha, pravidla
-Numbers: 42, 1024, 3.14159, -273.15 K
-```
-Every IP, every float, every Czech diacritic-free word verbatim. Zero hallucinations.
+~~~prompt
+Dej mi kontakty na projektove vedeni v EPC.
+~~~
 
-**B3c — CJK (Simplified Chinese) → English** — 50 s, 394 out tokens
-Prompt: `This image contains Chinese text. Read each line and give an English translation.`
-Verbatim response:
-```
-Data Center - Beijing
-Servers: 100 units
-Total Bandwidth: 40 Gbps
-Maintenance Window: Every Sunday 02:00-04:00
-```
-Correct semantic translation of `数据中心 · 北京 · 服务器: 100 台 · 总带宽: 40 Gbps · 维护窗口: 每周日 02:00-04:00`.
+~~~expect
+Calls search_corpus and returns six people as a list, each with company,
+role/area, phone and e-mail. A phone number is omitted only where it is genuinely
+absent from the source. No invented contacts.
+~~~
 
-**B3d — Farsi/Persian → English** — 190 s, 1500 out tokens (long reasoning trace)
-Prompt: `This image contains Persian (Farsi) text. Read every line and provide an English translation next to each.`
-Result: the reasoning trace recognises the Persian text, breaks it into words (`ایران`→Iran, `تهران`→Tehran, `دمای امروز`→"today's temperature", `درجه سلسیوس`→"degrees Celsius"), and translates each line. Some digit misread on non-Arabic-shaping fonts (rendered ٤٢ as ٢٢) — real Farsi documents from a scanner won't have this issue. **Warning for live demo:** budget 3+ minutes for this one; if the box is impatient, start it before intro talk and come back to it.
+### R3 · Everything about one host
 
-### B4 · Structured extraction from images
+- **tags:** rag, czech, table
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-03)
 
-**B4a — Bar chart → Markdown table** — 28 s, 211 out tokens
-Prompt: `This image is a bar chart. Extract the underlying data into a Markdown table with two columns: Region and Revenue.`
-Verbatim response:
-```
-| Region | Revenue |
-|--------|---------|
-| EU     | 240     |
-| US     | 410     |
-| APAC   | 180     |
-| LATAM  | 90      |
-| MEA    | 120     |
-```
-**Every value correct** to the last digit — pixel-measured bar heights read cleanly, labels transcribed, table formatted as asked. This is the "expense reports" and "extract data from PDF charts" story.
+~~~prompt
+Co vis o hostu acclcass1?
+~~~
 
-**B4b — Architecture diagram photo → regenerated mermaid** — 134 s, 1061 out tokens
-Prompt: `This image shows a small architecture diagram. Regenerate it as a mermaid graph (fenced mermaid). Preserve every box and every arrow direction.`
-Verbatim response:
-```mermaid
-flowchart TD
-    A["User"] --> B["Open WebUI"]
-    B --> C["llama-server"]
-    B --> D["mcpo (tools)"]
-    D --> E["rag-retrieval"]
-    D --> F["OpenNebula"]
-```
-Every source box captured, every arrow direction preserved. OWUI renders it inline.
+~~~expect
+Calls search_corpus and returns the full record for that host — on the order of
+nineteen fields, including environment, OS, virtualisation, storage, vCPU, RAM,
+HDD, support, hostnames, IP addresses, netmasks, VLAN id, filesystem and UID.
+For this one host only.
+~~~
 
-**B4c — Photo of code on paper → runnable Python** — 155 s, 1232 out tokens
-Prompt: `This image shows Python code. Transcribe it verbatim into a fenced python block. Then predict what it prints (do not use any tool).`
-Verbatim response:
-```python
-def is_prime(n):
-    if n < 2: return False
-    for i in range(2, int(n*0.5)+1):
-        if n % i == 0: return False
-    return True
+~~~must
+acclcass1
+~~~
 
-print([n for n in range(30) if is_prime(n)])
-```
-Then: predicts output as `[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]`.
-**Caveat worth mentioning if a board member is technical:** the model transcribed `n**0.5` (square root) as `n*0.5` — same shape on paper, wrong operator. It got the *predicted output right anyway* because it reasoned about the math, not just the transcribed code. Honest limit of 8B vision at small monospace text; a 32B on dGPU would be tighter.
+### R4 · Where credentials live
 
-### B2 · Diagrams — user chooses mermaid or draw.io
+- **tags:** rag, czech
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-04)
 
-The vision preset waits for the user to say which format; it never guesses. If ambiguous it asks.
+~~~prompt
+Kde ukládáme hesla pro EPC?
+~~~
 
-**B2a — draw.io interactive** — 187 s, 1500 out tokens
-Prompt: `Draw a mermaid diagram of the ragfarm data flow: user -> Open WebUI -> llama-server; Open WebUI -> mcpo -> rag-retrieval -> Qdrant; rag-retrieval -> embedder + reranker. Then same diagram as draw.io HTML that renders in-chat.`
-The model emits a fenced ```html block containing the draw.io template with `window.STYLE_PATH / SHAPES_PATH / STENCIL_PATH / DRAW_MATH_URL / GRAPH_IMAGE_PATH` set to `http://127.0.0.1/…` (our local `drawio-viewer` nginx mirror on port 80), then a `<mxfile>` XML block, then `<script src="http://127.0.0.1/js/viewer-static.min.js">`. OWUI's HTML preview iframe loads it — you get an interactive canvas with pan, zoom, layer toggle, lightbox. **All the shape libraries load locally** — no internet, no CDN, air-gap-safe. See ADR-0009 → "Why we run our own nginx" for the load-bearing why.
+~~~expect
+Calls search_corpus and explains that passwords are kept in NordPass, names the
+record to look up, and says how to use it with the RDP client. Does not print any
+actual credential.
+~~~
 
-### B1 · Tools work on the VL model too (same schemas)
+~~~must-not
+password:
+~~~
 
-Same tools as the text preset — `search_corpus`, `where_is_vm`, `list_vms_on_host`, `reboot_host`. On the VL model, tool routing is slightly less snappy than on the greedy text model (the Thinking reasoning trace burns tokens before the tool call fires). Concretely:
+### R5 · Where the documentation repo is
 
-- **`Jak se přihlásím ze ŠA do hostingu?`** — 40 s, calls `search_corpus`, returns a login procedure.
-  *Success mode; identical to Section A6.*
-- **`Jaká jsou FW pravidla pro host leadb229p.lea.piz?`** — 145 s.
-  *Tool call fires but the response body burned all tokens on reasoning. In OWUI (with `max_tokens` unlimited) the answer completes — see the Section-A ex-01 screenshot for the actual rendered answer.*
+- **tags:** rag, czech
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-05)
 
-**For tomorrow's demo:** if you want the FW-rules or contacts prompt done on-stage, use the **text preset** (swap via `activate-llm.sh`) — you already have proven screenshots and the greedy sampler is deterministic. Save the vision preset for image-input queries.
+~~~prompt
+Kde máme uložené GIT repo s dokumentací?
+~~~
+
+~~~expect
+Calls search_corpus and returns the exact Azure DevOps URL for the sa-hosting
+repository, not a paraphrase of it.
+~~~
+
+~~~must
+dev.azure.com
+~~~
+
+### R6 · How to log in from ŠA to EPC
+
+- **tags:** rag, czech, procedure
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-06)
+
+~~~prompt
+Jak se přihlásím ze ŠA do EPC?
+~~~
+
+~~~expect
+Calls search_corpus and lays out the login paths as a numbered procedure — SSH
+direct, RDP direct, terminal servers, GUI, reverse proxy, CLI — with hostnames,
+IP addresses, where the credentials come from, and which spreadsheets hold the
+details.
+~~~
+
+### R7 · All CutOver contacts
+
+- **tags:** rag, czech, list
+- **tools:** search_corpus
+- **status:** tool call verified 4/4 on 30B-A3B Instruct and 30B-A3B Thinking, 2026-08-12
+
+~~~prompt
+Úplně všechny kontakty co máme v souvislosti s CutOver plánem?
+~~~
+
+~~~expect
+Calls search_corpus and returns every person listed on the CutOver contact sheet,
+with role and contact details. This is an overview question, so the full table is
+the right answer rather than a single record.
+~~~
+
+~~~must
+CutOver
+~~~
+
+### R8 · Honest miss on an out-of-corpus question
+
+- **tags:** rag, czech, negative
+- **tools:** search_corpus
+- **status:** verified 2026-07-27 (text preset, screenshot ex-07)
+
+~~~prompt
+Kdo je prezident USA?
+~~~
+
+~~~expect
+Calls search_corpus anyway, finds nothing relevant, and says plainly that the
+corpus contains no such information. It may note which names DO appear while
+making clear they are not presidents. The required behaviour is the honest miss:
+absolutely no answer from world knowledge, no invented name.
+~~~
+
+~~~must-not
+Trump
+~~~
 
 ---
 
-## Section C — `<think>` / `<no_think>` — the honest caveat
+## Section T — Tools beyond retrieval
 
-Qwen3 nominally supports two in-message tokens that gate the visible reasoning block:
+### T1 · Clock
 
-- **`/think`** — force `<think>...</think>` reasoning trace before the answer.
-- **`/no_think`** — suppress it for a snappier answer.
+- **tags:** tools
+- **tools:** get_current_timestamp
+- **status:** verified 2026-07-27 (text preset, screenshot ex-07)
 
-**On this specific `Qwen3-VL-8B-Thinking` Q4_K_M GGUF, `/no_think` is a no-op.** The chat template baked into the GGUF has no `enable_thinking` gate and its `add_generation_prompt` block hardcodes `<|im_start|>assistant\n<think>\n` — so every assistant turn always starts a reasoning block regardless of what the user types. Empirically verified today (see [ADR-0009](decisions/ADR-0009-vision-model-support.md) → "Instruct vs Thinking").
+~~~prompt
+Kolik je hodin?
+~~~
 
-**If a board member asks why we don't just turn thinking off:** we can, by swapping to `Qwen3-VL-8B-Instruct` (a separate GGUF, ~5 GB, one `activate-llm.sh` swap + 30 s restart) — same vision quality, no reasoning trace, faster answers. Post-dGPU, that becomes the default and Thinking gets used only for hard multi-step questions where the extra latency is worth the accuracy. Today's demo runs Thinking because that's what's loaded; the swap is scripted and reversible.
+~~~expect
+Calls the clock tool and answers with one short line giving the current time and
+the timezone offset. Does not call search_corpus.
+~~~
+
+### T2 · Human-gated reboot
+
+- **tags:** tools, safety
+- **tools:** reboot_host
+- **status:** verified 2026-07-27 (text preset, MOCK placement backend, screenshot ex-07)
+- **skip:** mutating action behind a confirmation modal; cannot run unattended
+
+~~~prompt
+Rebootuj host node-03.
+~~~
+
+~~~expect
+Routes to reboot_host through the reboot_guarded confirmation wrapper and STOPS
+for human approval. On approval, reports that the host was restarted and how many
+VMs were drained first. It must never report success without the confirmation
+step having happened.
+~~~
 
 ---
 
-## Section D — Speed reality check (iGPU today → dGPU projection)
+## Section V — Vision
 
-Verification numbers are on the **AMD Radeon 890M iGPU** sharing LPDDR5x (~130 GB/s aggregate bandwidth). Decode is memory-bandwidth-bound — physics, not tuning.
+> **Provenance warning.** V1-V7 were verified on 2026-07-27 against
+> Qwen3-VL-**8B**-Thinking (GGUF, old AMD box). Timings quoted in the status
+> lines are from that hardware and are historical; the Spark is far faster. The
+> capability claims are what matter.
 
-| Metric | iGPU today (Qwen3-VL-8B-Thinking Q4) | Projected: dGPU ≥ 32 GB (RTX 5090 / A6000 / L40S) |
-|---|---|---|
-| Decode | **~8 tok/s** | 45-70 tok/s (**6-9× faster**) |
-| Prefill | ~170 tok/s | 800-1500 tok/s (**5-9× faster**) |
-| Dense-receipt OCR (~300 out tok) | ~40 s | **5-8 s** |
-| Farsi-with-translation (~1500 out tok) | ~190 s | ~25 s |
-| Room for 30B-class VL model | no (won't fit) | **yes** — `Qwen3-VL-30B-A3B-Thinking` fits in 32 GB Q4; jumps another quality tier |
-| Room for larger context | tight with `-c 32768` + `-np 4` | comfortable; plus batched requests |
+### V1 · Receipt OCR, real world
 
-The dGPU isn't a nice-to-have — it turns "wow, it can read a Farsi receipt in 40 s" into "yes, it just did that in real time while I was still finishing the sentence." Same code, same architecture, same everything else — only inference speed changes. Every prompt in Section B stays valid.
+- **tags:** vision, ocr
+- **status:** verified 2026-07-27 on 8B-Thinking — 77 s, 613 out tokens, 8.1 tok/s (old AMD iGPU)
+
+~~~prompt
+Read all the text in this image. Preserve the original numbers and layout.
+~~~
+
+~~~expect
+Transcribes every line of the receipt verbatim, including the vendor name, the
+line item with its quantity and unit price, subtotal, grand total, cash tendered
+and change due. All figures exact. Nothing invented, nothing translated unless
+asked.
+~~~
+
+### V2 · Mixed-script OCR with identifiers
+
+- **tags:** vision, ocr
+- **status:** verified 2026-07-27 on 8B-Thinking — 59 s, 462 out tokens
+
+~~~prompt
+OCR every visible line. Keep punctuation, numbers, and IP addresses exact.
+~~~
+
+~~~expect
+Every IP address, CIDR suffix, port, e-mail address and float reproduced
+character for character, including negative and multi-decimal values. Czech words
+kept as written. Zero hallucinated lines.
+~~~
+
+### V3 · Chinese to English
+
+- **tags:** vision, ocr, translation
+- **status:** verified 2026-07-27 on 8B-Thinking — 50 s, 394 out tokens
+
+~~~prompt
+This image contains Chinese text. Read each line and give an English translation.
+~~~
+
+~~~expect
+Reads each line of Simplified Chinese and gives a correct English translation,
+preserving the numbers and units exactly — server counts, bandwidth figures and
+the maintenance window with its times.
+~~~
+
+### V4 · Farsi to English
+
+- **tags:** vision, ocr, translation
+- **status:** verified 2026-07-27 on 8B-Thinking — 190 s, 1500 out tokens; slowest case in the library
+
+~~~prompt
+This image contains Persian (Farsi) text. Read every line and provide an English translation next to each.
+~~~
+
+~~~expect
+Recognises the Persian text, breaks it into words and translates each line into
+English alongside the original. Place names and temperature units come through
+correctly. Digit misreads on non-Arabic-shaping fonts are a known limit and not a
+failure of this case.
+~~~
+
+### V5 · Bar chart to table
+
+- **tags:** vision, extraction, table
+- **status:** verified 2026-07-27 on 8B-Thinking — 28 s, 211 out tokens; every value correct
+
+~~~prompt
+This image is a bar chart. Extract the underlying data into a Markdown table with two columns: Region and Revenue.
+~~~
+
+~~~expect
+A markdown table with exactly the two requested columns and one row per bar, the
+region labels transcribed and each revenue value read correctly from the bar
+height. No commentary needed beyond the table.
+~~~
+
+### V6 · Diagram photo to mermaid
+
+- **tags:** vision, diagram
+- **status:** verified 2026-07-27 on 8B-Thinking — 134 s, 1061 out tokens
+
+~~~prompt
+This image shows a small architecture diagram. Regenerate it as a mermaid graph (fenced mermaid). Preserve every box and every arrow direction.
+~~~
+
+~~~expect
+One fenced mermaid block. Every box from the source appears as a node, every
+arrow appears with its direction preserved, and no edges are invented. Open WebUI
+renders it inline.
+~~~
+
+~~~must
+mermaid
+~~~
+
+### V7 · Code photo to runnable Python
+
+- **tags:** vision, code
+- **status:** verified 2026-07-27 on 8B-Thinking — 155 s, 1232 out tokens; transcribed n**0.5 as n*0.5, still predicted the right output
+
+~~~prompt
+This image shows Python code. Transcribe it verbatim into a fenced python block. Then predict what it prints (do not use any tool).
+~~~
+
+~~~expect
+A fenced python block reproducing the code from the photo, followed by a
+prediction of its output. The predicted output must be correct. It must NOT call
+the code interpreter, because the prompt forbids it.
+~~~
+
+---
+
+## Section D — Diagrams the model authors
+
+### D1 · Reverse the arrows in a supplied diagram
+
+- **tags:** diagram, drawio, edit
+- **attach:** tests/fixtures/dependency_input.drawio
+- **status:** verified 2026-08-09, 10/10 structural checks on both 30B-A3B Thinking FP8 and 32B dense FP8; rendered headlessly
+
+~~~prompt
+V přiloženém Draw.io grafu obrať směr šípek mezi Frontend → API → Database opačným směrem. Prezentuj výstup opět ve formátu Draw.io.
+~~~
+
+~~~expect
+One fenced html block containing the ragfarm draw.io wrapper and the user's own
+XML with only the arrow directions changed: each edge's source and target
+swapped. The user's cell ids, styles, geometry, labels and fill colours are
+preserved exactly — the diagram must be edited in place, not redrawn. No elided
+attributes, no reserved ids 0 or 1 on content cells, every cell keeps its
+mxGeometry, and the page loads ragfarm-drawio.js.
+~~~
+
+~~~must
+ragfarm-drawio.js
+~~~
+
+~~~must-not
+...
+~~~
+
+### D2 · Author a diagram from a description
+
+- **tags:** diagram, drawio
+- **status:** verified 2026-08-09 on 30B-A3B Thinking FP8; fenced 3/3, ~11k completion tokens
+
+~~~prompt
+Vytvoř Draw.io ER diagram naší monitorovací domény: entity Incident, Problem, OBS Process, Micro Service, Cluster, Node, Data Centre, Squad, Person. Každá entita má 2-3 atributy, barevné výplně podle domény a ortogonální spoje. Prezentuj jako Draw.io.
+~~~
+
+~~~expect
+One fenced html block using the wrapper. Every named entity present, each with
+its attribute rows, colours grouped by domain, and orthogonal edges between
+related entities. Valid draw.io XML that renders.
+~~~
+
+~~~must
+ragfarm-drawio.js
+~~~
+
+### D3 · 1:1 conversion of a diagram image
+
+- **tags:** diagram, drawio, vision, hard
+- **attach:** tests/fixtures/Splunk_in_KB.png
+- **status:** KNOWN HARD — single-pass fails. See docs/measurements/2026-08-09-instruct-vs-thinking-drawio.json
+- **skip:** single-pass conversion is a known failure; kept as the reference for the two-pass workflow
+
+~~~prompt
+Převeď obrázek grafu z přílohy do formátu Draw.io. Zachovej fortmátování, rámečky, spoje, šipky, typy a styly šipek, velikosti, poměry, vztahy, barvy, zkrátka vše 1:1. Prezentuj výsledný Draw.io graf.
+~~~
+
+~~~expect
+Twenty-eight entities as swimlanes with their attribute rows, the PoC container,
+the Legenda frame, colours by domain, and roughly twenty-six edges. In one pass
+neither model achieves this: Thinking stops early with a simplified 43-box
+diagram, Instruct loops on edges until the budget is gone. The working route is
+two passes — boxes first with edges forbidden, then edges given the box ids.
+~~~
+
+### D4 · Inventory a diagram image without drawing it
+
+- **tags:** vision, extraction, table
+- **attach:** tests/fixtures/Splunk_in_KB.png
+- **status:** verified 2026-08-09 on 30B-A3B Thinking FP8 — 28/28 entities, all attribute rows correct, one placement error
+
+~~~prompt
+Vypiš úplný inventář tohoto ER diagramu jako markdown tabulku. Jeden řádek na entitu: název | barva výplně | seznam VŠECH atributových řádků uvnitř rámečku | je uvnitř modrého rámu PoC? (ano/ne). Nic nevynechávej, nic neshrnuj.
+~~~
+
+~~~expect
+A markdown table with one row per entity — twenty-eight of them — listing every
+attribute row inside each box, its fill colour, and whether it sits inside the
+PoC frame. Source typos may be normalised. This is the perception half of D3 and
+it is reliable where the drawing half is not.
+~~~
+
+---
+
+## Section C — Coding
+
+### C1 · Write and actually run Python
+
+- **tags:** code, interpreter
+- **status:** verified 2026-07-27 (text preset, screenshot ex-09)
+
+~~~prompt
+Vygeneruj mi kód pro quicksort a otestuj ho spuštěním nad malým polem náhodných řetězců. Prezentuj kód a výsledné pořadí tříděného pole po běhu sortu.
+~~~
+
+~~~expect
+Emits complete Python implementing quicksort over a random list of strings, then
+CALLS the code interpreter to run it and reports the sorted result. Per RULE 6,
+Python is the one language it must execute rather than only describe.
+~~~
+
+### C2 · Non-Python code is not executed
+
+- **tags:** code, negative
+- **status:** verified 2026-08-05 as the fix for the Python/JavaScript reasoning loop
+
+~~~prompt
+Napiš mi v JavaScriptu funkci, která z pole objektů udělá mapu podle klíče id.
+~~~
+
+~~~expect
+Outputs the JavaScript and stops. It must NOT call the code interpreter, must not
+invent test cases for it, and must not apologise for being unable to run
+JavaScript — the interpreter is Python-only and declining to run other languages
+is correct behaviour, not a limitation worth narrating.
+~~~
+
+~~~must-not
+code interpreter
+~~~
+
+---
+
+## Section M · Mermaid
+
+### M1 · Dependency tree of a sentence
+
+- **tags:** diagram, mermaid
+- **status:** verified 2026-07-27 (text preset, screenshot ex-08)
+
+~~~prompt
+Vygeneruj stromový diagram slovních vazeb ve větě: "Once upon a time there was a very little dog called Steven who owned a nice little yellow car".
+~~~
+
+~~~expect
+One fenced mermaid block containing a genuine branching dependency tree rather
+than a linear chain: the head noun acts as a hub with its determiners and
+modifiers as children, and the relative clause branches off correctly.
+~~~
+
+~~~must
+mermaid
+~~~
