@@ -25,7 +25,8 @@ open-webui.
 
 | plane | component | directory | compose service / container | bind | mcpo mount | agent-facing surface | mutates |
 |-------|-----------|-----------|------------------------------|------|-----------|----------------------|---------|
-| host | vllm | `.venv-vllm` | — (systemd `ragfarm-vllm`) | `127.0.0.1:8080` | — | OpenAI base URL (swappable) | no |
+| host | vllm slot 0 | `.venv-vllm` | — (systemd `ragfarm-vllm@0`) | `127.0.0.1:8080` | — | OpenAI base URL (swappable) | no |
+| host | vllm slot 1 | `.venv-vllm` | — (systemd `ragfarm-vllm@1`) | `127.0.0.1:8082` | — | second resident model, mid-chat switchable | no |
 | host | embedder | `services/embedder` | — (systemd `ragfarm-embedder`) | `127.0.0.1:8090` `/embed` | — | internal — dense+sparse embed, **CUDA** | no |
 | host | reranker | (built at `~/llama.cpp`) | — (systemd `ragfarm-reranker`) | `127.0.0.1:8081` `/reranking` | — | internal — bge-reranker-v2-m3 GGUF, **CUDA** (ADR-0008) | no |
 | host | ingester (+ watcher) | `services/ingester` | — (systemd `ragfarm-ingester-watcher`) | — | — | batch + autonomous incremental sync (ADR-0006) | writes Qdrant |
@@ -44,12 +45,17 @@ rag-retrieval, mcp-placement, mcp-host-control, mcpo, open-webui.
 **Three processes share the one GPU and the one memory pipe** — there is no separate
 VRAM on GB10 (ADR-0013 §5). Measured while idle-but-loaded:
 
-| process | GPU memory |
+| process | share of the 121.7 GiB pool |
 |---|---|
-| vLLM (`:8080`, `LLM_GPU_MEM_UTIL=0.50`) | ~59.5 GB |
+| vLLM slot 0 — 30B-A3B Thinking FP8 | 0.338 (~41 GiB) |
+| vLLM slot 1 — 30B-A3B Instruct NVFP4 | 0.237 (~29 GiB) |
 | embedder BGE-M3 (`:8090`) | ~1.6 GB |
 | reranker llama.cpp (`:8081`) | ~0.9 GB |
-| **total** | **~62 GB of 121 GB** |
+| **total against a 0.72 ceiling** | **0.575** |
+
+Slot shares are **derived, not chosen**: `(weights + KV + overhead) / total`, with
+weights taken from the size verified at download. `activate_llm.py` refuses any
+binding that would exceed the ceiling. Live figures: `scripts/activate_llm.py --status`.
 
 `llama-server` now runs **once**, for the reranker only (`:8081 --reranking`,
 ADR-0008/0013 §3) — generation moved to vLLM. The embedder is embeddings-only.
@@ -79,14 +85,15 @@ see the model-format note in `scripts/lib-models.sh`).
 
 | role | model | deployed revision | reproduce with |
 |------|-------|-----------------|----------------|
-| LLM | `ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4` (NVFP4 safetensors, 17.9 GiB, vision) | `3c6162d5513d26f008628eebe9b4355559b4a305` | step-02 fragment in `scripts/deploy.sh` (`snapshot_download`) |
+| LLM slot 0 | `Qwen/Qwen3-VL-30B-A3B-Thinking-FP8` (30.1 GiB, vision, MoE) | see `models/llm/active.json` | `scripts/fetch_llm.py --sync` |
+| LLM slot 1 | `ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4` (17.9 GiB, vision, MoE) | `3c6162d5513d26f008628eebe9b4355559b4a305` | `scripts/fetch_llm.py --sync` |
 | embedder | `BAAI/bge-m3` | `5617a9f61b028005a4858fdac845db406aefb181` (latest; this repo ships **only** `pytorch_model.bin` — it has no `model.safetensors`) | `scripts/fetch-encoder.sh` |
 | reranker | `BAAI/bge-reranker-v2-m3` | latest, converted to f16 GGUF locally | `scripts/fetch-encoder.sh` |
 
-Served LLM alias is **`qwen3-vl-30b-a3b`** and it is **load-bearing**:
-`infra/openwebui/setup_openwebui.py` keys `MODEL_TUNING` by the alias advertised on
-`/v1/models`, so serving under another name makes the `ragfarm-vision` preset
-silently fail to bind.
+The served alias is **load-bearing**: Open WebUI presets bind to it, so serving
+under another name makes the preset silently fail to bind and the picker offers
+only raw base models — no system prompt, no tools, silently ungrounded answers.
+Aliases live in `models/llm/active.json`; see `man docs/man1/active.json.1`.
 
 The embedder + reranker must stay a **compatible pair** (`fetch-encoder.sh --list`).
 Per-model detail lives in `models/{llm,embeddings,reranker}/MODEL.md` — including the
@@ -100,10 +107,18 @@ reading before touching the serving flags.
 ## Autostart & lifecycle
 
 ### What starts on boot
-- **Host services** (systemd, already `enabled`): `ragfarm-vllm.service` (LLM, CUDA),
-  `ragfarm-reranker.service` (CUDA cross-encoder, ADR-0008; `Nice=5`),
-  `ragfarm-embedder.service` (CUDA embeddings),
-  `ragfarm-ingester-watcher.service` (autonomous corpus sync, ADR-0006).
+- **Enabled at boot:** `ragfarm-vllm@0.service` (slot 0, the primary MoE),
+  `ragfarm-reranker.service` (`Nice=5`), `ragfarm-embedder.service`.
+- **NOT enabled, deliberately:** `ragfarm-vllm@1.service`. systemd would start both
+  slots in parallel, and vLLM cannot profile GPU memory while another instance is
+  allocating — that race kills both. The serialisation lives in `activate_llm.py`,
+  not in the unit. Start slot 1 by hand once slot 0 answers `/v1/models`.
+- **Not installed on this host:** `ragfarm-ingester-watcher.service`. `stack.sh
+  status` reports it `[ABSENT]` rather than pretending otherwise.
+
+> **After any reboot, run `scripts/stack.sh status` first.** On 2026-08-12 the box
+> came back with every container running and both slots down, and the only symptom
+> in the UI was "No models available".
 - **Container stack**: `ragfarm-stack.service` runs `docker compose up -d` for the
   six container services (see the topology note above), then its `ExecStartPost`
   runs `scripts/mcpo-heal.sh`. Containers also carry `restart: unless-stopped` and
@@ -189,147 +204,39 @@ not a number anyone should guess at up front.
   (image pulls + container proxy inheritance).
 
 ## Operator scripts (`scripts/`) — a newcomer's map
-Everything here runs from the repo root on the host as `dave`. Grouped by job.
 
-**Deploy & lifecycle**
-- `stack.sh` — the **one-command operator entry point**: `stack.sh {start|stop|
-  restart|status|health}`. Brings the whole stack (host `llama`/`reranker`/`embedder`/
-  `ingester-watcher` units + the container stack) up or down in the right order and
-  health-checks every endpoint. Use this for day-to-day start/stop; the per-service
-  systemd sequence is only for debugging one piece (see Autostart & lifecycle above).
-- `deploy.sh` — the reproducible, idempotent full deploy of the durable stack:
-  ordered phases (preflight → venv → host services → stack → corpus → watcher →
-  verify), each ending in a machine-checkable gate; safe to re-run. Uses `sudo` only
-  for the specific systemd install/enable actions (never wraps the whole script).
-  Picks a Python dependency profile — `--profile cpu` (default) or `cu13` — pinned in
-  `services/requirements.lock` / `requirements.cu13.lock` (identical package set;
-  only the torch wheel index differs, CPU vs CUDA 13.x). Builds the reranker GGUF if
-  absent and installs all host units incl. `ragfarm-reranker`. The AI-out-of-the-loop
-  path for repeatable deploys.
-- `mcpo-heal.sh` — waits until the MCP backends accept TCP, then restarts mcpo once
-  so every tool mounts cleanly (works around the streamable-http boot race). Runs as
-  the stack unit's `ExecStartPost`; run it by hand after any ad-hoc `rag-retrieval`
-  restart.
-- `proxy-env.sh` — **`source` it, don't execute**, before any network command (pip /
-  HuggingFace / `docker compose`); loads repo-root `.env` and normalizes
-  `HTTP(S)_PROXY`/`NO_PROXY` (guarantees loopback + containers bypass the proxy).
+Everything runs from the repo root as `dave`. Full detail is in the manual pages;
+this table is the index, not a second copy of them.
 
-**Model management (fetch / hot-swap)**
+### Daily
 
-> **REPLACED 2026-08-05 by `scripts/fetch_llm.py` + `scripts/activate_llm.py`,
-> driven by the git-tracked registry `models/llm/active.json` (ADR-0013 §2a).**
->
-> ```bash
-> scripts/fetch_llm.py -m Firworks/Qwen3-VL-32B-Thinking-nvfp4   # register + download
-> scripts/fetch_llm.py --sync        # fetch everything the registry lists as missing
-> scripts/fetch_llm.py --verify      # byte-check what is on disk against the Hub
-> scripts/activate_llm.py -s 0 -a qwen3-vl-30b-a3b-thinking-nvfp4   # bind slot 0
-> scripts/activate_llm.py --status   # slots, ports, GPU budget
-> ```
->
-> **SLOTS.** vLLM serves ONE base model per process, so two resident models means
-> two processes: `ragfarm-vllm@N.service` on port `8080 + 2N` (8081 is the
-> reranker), each with its own `.env.slotN` written by `activate_llm.py`. This is
-> what allows switching model **mid-chat** in Open WebUI with the conversation
-> intact. `--gpu-memory-utilization` is per process and instances do NOT
-> coordinate — two slots at the single-model 0.50 will OOM; `activate_llm.py`
-> derives each slot's share and refuses to exceed a 0.72 total.
->
-> `activate_llm.py` errors out on a registry with duplicate `model`/`alias`/`preset`
-> rather than auto-fixing it: those names show up in the UI.
->
-> The GGUF-era text below is kept because the mechanics are still accurate for
-> llama.cpp, which still serves the reranker. `fetch-encoder.sh` is NOT retired.
+| script | job | manual |
+|---|---|---|
+| `stack.sh {start\|stop\|restart\|status\|health\|list}` | the whole system, and the only honest health check — 13 services with depth checks where a 200 can lie | `man docs/man1/stack.1` |
+| `activate_llm.py` | bind a model to a slot; manages the GPU memory budget across slots | `man docs/man1/activate_llm.1` |
+| `fetch_llm.py` | download, verify against the Hub, register in `active.json` | `man docs/man1/fetch_llm.1` |
+| `infra/openwebui/setup_openwebui.py` | presets, tool servers, prompts — runs automatically after every activation | `man docs/man1/setup_openwebui.1` |
+| `proxy-env.sh` | **`source` it, never execute.** Loads `.env`, normalises proxy vars, guarantees loopback bypass | `man docs/man1/env.1` |
 
-> **`fetch-llm.sh` and `activate-llm.sh` are RETIRED for generation (ADR-0013).**
-> They are GGUF/`--mmproj`/llama.cpp-shaped, the Spark serves NVFP4 safetensors on
-> vLLM, and `deploy.sh` no longer calls them. Kept below because the *mechanics* are
-> still accurate for llama.cpp and no vLLM-shaped replacement exists yet. To change
-> the served LLM today: edit `LLM_MODEL_PATH`/`LLM_SERVED_NAME` in `.env` and restart
-> `ragfarm-vllm`. `fetch-encoder.sh` is NOT retired — it still fetches the
-> embedder+reranker pair and is called by `deploy.sh`.
-- `fetch-llm.sh` — fetch/swap the generative LLM GGUF into `models/llm/<slug>/` and
-  write `LLM_GGUF_PATH` to `.env` (the unit reads it). `--list` shows known-good
-  tool-calling LLMs; `--repo`/`--file` swap; `--force` re-fetch. Restart `ragfarm-llama`.
-  **Vision models** (e.g. Qwen2.5-VL) are handled automatically, no separate flag: a
-  vision-language GGUF needs a second, small "multimodal projector" GGUF passed to
-  llama-server as `--mmproj`, or it loads but can't see images. Before downloading,
-  the script checks whether the HF repo itself hosts a `*mmproj*.gguf`; if so it
-  fetches that too and writes `LLM_GGUF_MMPROJ`, else (plain text model) it **clears**
-  that var — so switching back to a text-only model can't launch with a leftover
-  `--mmproj` from a previous vision model. Example (fetches both files):
-  ```bash
-  scripts/fetch-llm.sh --repo ggml-org/Qwen2.5-VL-7B-Instruct-GGUF \
-    --file 'Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf'
-  ```
-- `activate-llm.sh` — switch the active LLM among models **already on disk**, no
-  re-download. Lists every `models/llm/<slug>/` that has a complete GGUF (interactive
-  numbered prompt, or `--dir <slug>` / `--path <file>` non-interactively; `--list`
-  prints and exits), and writes `LLM_GGUF_PATH` + `LLM_GGUF_MMPROJ` to `.env` using the
-  same mmproj auto-detect/clear rule as `fetch-llm.sh`. This is the tool for "I already
-  fetched three models, which one is live" — fetch once per model, activate freely
-  between them:
-  ```bash
-  scripts/activate-llm.sh --list                       # what's on disk
-  scripts/activate-llm.sh --dir qwen2.5-32b-instruct-gguf   # switch to it
-  sudo systemctl restart ragfarm-llama                  # RETIRED: unit no longer exists
-  ```
-- `fetch-encoder.sh` — fetch/swap the **matched** embedder+reranker pair into
-  `models/embeddings/<slug>/` and `models/reranker/<slug>/` (converts the reranker to
-  GGUF), writing `EMBED_MODEL_PATH` + `RERANK_MODEL_PATH` to `.env`. `--list` shows
-  compatible pairs. Restart `ragfarm-embedder ragfarm-reranker`. Both fetch latest,
-  auto-pick the fastest weight format, and are the ONE place download logic lives —
-  `deploy.sh`'s venv phase calls them (no duplication). `lib-models.sh` is their
-  shared helper (sourced, not run).
+### Occasional
 
-**Activating a swapped model** — the fetch/activate scripts only write `.env`; the
-units read it on (re)start. What you must do after a swap depends on which model changed:
-- **LLM** → edit `.env` (`LLM_MODEL_PATH`), then `sudo systemctl restart ragfarm-vllm`.
-  Nothing else — the LLM doesn't touch embeddings or the corpus. (If the model *alias*
-  changed, also re-run `infra/openwebui/setup_openwebui.py` so the OWUI preset points at
-  There is no `--mmproj` step any more: the old llama.cpp unit attached a separate
-  multimodal projector GGUF, whereas the vLLM checkpoint carries vision natively.
-  `LLM_MMPROJ_PATH` / `LLM_GGUF_MMPROJ` are inert on the Spark.
-- **Reranker only** → `sudo systemctl restart ragfarm-reranker`. Query-time only; no re-ingest.
-- **Embedder** (`fetch-encoder.sh`) → the vector space changes, so you MUST re-embed:
-  `sudo systemctl restart ragfarm-embedder ragfarm-reranker` **then**
-  `.venv/bin/python services/ingester/ingester.py --recreate --corpus /data/corpus`
-  (or `scripts/deploy.sh --recreate-corpus`). **Skipping the re-ingest silently breaks
-  retrieval** — old stored vectors vs new query vectors. `scripts/stack.sh restart`
-  restarts every service but does **not** re-ingest; that step is always manual.
-  (`fetch-encoder.sh` prints this reminder when it actually re-fetched the embedder.)
+| script | job |
+|---|---|
+| `deploy.sh` | idempotent full deploy, phase by phase, each ending in a machine-checkable gate. `--fresh` rebuilds from nothing. The AI-out-of-the-loop path. |
+| `test_regressions.py` | replay `docs/prompts.md` against the live slot and judge the answers. Run before and after any prompt edit — see [regression testing](regression-testing.md). |
+| `mcpo-heal.sh` | waits for the MCP backends to accept TCP, then restarts mcpo once so every tool mounts. Needed after any ad-hoc `rag-retrieval` restart; `stack.sh` runs it on cold starts. |
+| `fetch-drawio-viewer.sh` | rehydrates the 153 MB draw.io mirror. Gitignored, so a fresh clone needs it or every in-chat diagram renders blank. |
+| `check_drawio_e2e.py` | asserts ten structural properties of a model-authored diagram. |
+| `bench_ab.py`, `probe_k.py` | measurement instruments for a specific question; not maintained between uses. |
 
-**Retrieval / RAG debugging**
-- `rag_pool_inspect.py` — dump the first-stage RRF candidate pool for a query
-  (`--branches` adds the dense-only and sparse-only lists). Separates a RANKING
-  problem (chunk is in the pool but scored low → the reranker's job) from a RECALL
-  problem (chunk never entered the pool → needs better first-stage recall / query
-  expansion). This is the raw, pre-rerank view.
-  ```bash
-  .venv/bin/python scripts/rag_pool_inspect.py --branches "hsmbvxip001ts" "proj vedoucí EPC"
-  ```
-- `ingest-embed-test.sh` — quick smoke test: Qdrant points carry non-empty sparse
-  vectors, and a known-hostname `search_corpus` lookup returns rows.
+### Retired — do not use
 
-**Agent / tool-routing debugging**
-- `dump_mcp_openapi.py` — enumerate every mcpo mount and dump its `openapi.json`
-  plus the exact `operationId` the model is shown (e.g. `tool_search_corpus_post`).
-  Ground truth when writing routing hints or debugging why the model does/doesn't
-  call a tool. `--full` for the whole schema per mount.
-- `trace_tool_calls.py` — drive llama-server with the **real** OWUI tool schemas
-  (pulled live from mcpo) and the deployed grounding prompt at deterministic
-  settings, feeding canned tool results, to watch which tools the 7B calls with what
-  arguments across rounds. Regression-check routing after a prompt/schema change.
-- `agent.py` — headless multi-turn agent over the same stack (llama-server + mcpo
-  tools + the deployed grounding prompt) but with a context loop **we own and
-  measure**. Unlike `trace_tool_calls.py` it EXECUTES tools for real (incl. a CLI
-  reboot confirm mirroring `reboot_guarded.py`) and carries real history. Modes:
-  interactive REPL, one-shot prompts, or scripted benchmarks (`--scenario
-  reboot-canary`). Per turn it splits and times the **deliberate / tool / answer**
-  stages (prefill vs decode each) and reports context size + how many old tool
-  results were elided. This is the control for isolating an OWUI-loop bug from a
-  model/stack bug — e.g. it reproduced the repeated-reboot miss with no OWUI in the
-  loop, proving that failure is model discipline, not compaction.
+`fetch-llm.sh` and `activate-llm.sh` are the GGUF/llama.cpp-era tools, superseded
+by `fetch_llm.py` and `activate_llm.py` (note the underscores). The old pair wrote
+`LLM_GGUF_PATH` and `LLM_GGUF_MMPROJ` into `.env`; neither variable exists in the
+current deployment, and there is no `--mmproj` because vision is native to the
+checkpoint. They remain in the tree only because `scripts/deploy.sh` fragments
+from the build still reference them.
 
 ## Open WebUI configuration (reproducible, not hand-clicked)
 OWUI stores config in its `openwebui_data` volume. Recreate it with
@@ -610,38 +517,29 @@ Practical demo advice: default (thinking on) for the first, hardest question of
 the day (RAG lookup, complex OCR); append `/no_think` for follow-ups, quick
 lookups, and diagram requests where the trace adds no value.
 
-## Debug & measurement (`tests/tracing/`)
+## Debug & measurement
 
-Standalone Python tools (no dependencies beyond `requests`) that answer *where
-did the time go* for any inference or chat turn. All safe to run against the
-live stack — read-only, no side effects.
+Four separate instruments, for four different questions. Reach for the right one
+rather than the nearest one.
 
-> **Status: incomplete, rewrite expected.** This is a framework, not a finished
-> tool, and it has no concept of thinking/reasoning models. Some docstrings still
-> quote pre-Spark ports. Treat output as indicative; requirements for the rewrite
-> are in `tests/tracing/README.md`. The `owui_trace_proxy.py` experiment
-> (port 8095) is **retired** — it corrupted the OWUI DB and presets during demo
-> prep. It is still on disk; do not re-plumb it without a plan.
+| question | tool |
+|---|---|
+| **Is the stack up, and honestly?** | `scripts/stack.sh status` — 13 services, with depth checks where a 200 can lie |
+| **Did a prompt edit break behaviour?** | `scripts/test_regressions.py` — replays `docs/prompts.md`, judges the answers. See [regression testing](regression-testing.md) |
+| **Is this model better than that one?** | `scripts/bench_ab.py`, raw results under `docs/measurements/` |
+| **Why didn't my chunk win?** | `scripts/rag_pool_inspect.py`, and `search_corpus`'s own `_timing_ms.gate` |
 
-Every tool takes `--url http://127.0.0.1:8080` (or the equivalent flag) so
-they're portable across the swappable llama-server endpoint. Default endpoint
-in the code is `localhost:8001` — always pass `--url` explicitly.
+`tests/tracing/` holds the older profiling toolkit — nine scripts that answer
+*where did the time go* for a chat turn. **They have no concept of thinking
+models**, so they cannot separate reasoning tokens from answer tokens, which
+makes their timings meaningless against Qwen3-VL-Thinking. Treat them as a
+framework awaiting a rewrite; the catalogue, the surviving findings and the
+requirements for that rewrite are in
+[`tests/tracing/README.md`](../tests/tracing/README.md).
 
-### The catalog
-
-| Tool | What it measures | When to use |
-|------|------------------|-------------|
-| `ragfarm_bench.py` | Basic prefill/decode tok/s + TTFT + E2E per prompt | Quick "is llama fast enough right now" check |
-| `ragfarm_bench_extended.py` | Full per-stage timings, absolute token+byte counts, context growth, CSV/JSON export | Regression tracking across commits or hardware swaps |
-| `ragfarm_bench_chatid.py` | Same, plus context-blowup detection per chat session | Find when a conversation starts overflowing context |
-| `chat_execution_tracer.py` | Chat session timeline: user→prefill→tool decision→tool exec→decision phase→generation, with orchestration-overhead % | Diagnose "chat feels slow" vs "LLM is slow" |
-| `ragfarm_tracer_simple.py` | One-shot telemetry query: which model is loaded, endpoint latencies | Sanity check before any deeper trace |
-| `ragfarm_integrated_tracer.py` | Combined engine telemetry + pipeline trace demo | Report generation for a whole pipeline |
-| `ragfarm_rag_tracer.py` | RAG candidate-pool evolution: Qdrant → RRF → reranker, per-stage tokens/latency | Debug retrieval quality regressions ("why didn't my chunk win?") |
-
-*(Not integrated: `ragfarm_http_tracer.py` — proxy-based, requires reconfiguring
-OWUI's LLM endpoint. Its only unique benefit is E2E prompt-answer wall time,
-which every other tool measures anyway.)*
+> `scripts/owui_trace_proxy.py` (port 8095) is **retired**. It corrupted the Open
+> WebUI database and presets during demo prep. Still on disk; do not re-plumb it
+> without a plan.
 
 ### Verified one-liners (run today)
 
