@@ -578,7 +578,7 @@ requirements for that rewrite are in
 | Decode | **75.6 tok/s** (`flashinfer_b12x`) / **71.1 tok/s** (`FLASHINFER_CUTLASS`, default) | 256 tok, `ignore_eos`, single stream, 3 runs. ~54% of the ~140 tok/s bandwidth ceiling |
 | Prefill | **UNMEASURED** | Where FP4 should show its biggest win — the gap most worth closing |
 | Vision OCR (dense receipt) | UNMEASURED on Spark | Capability verified on AMD; re-time it here |
-| Reranker turn | UNMEASURED on Spark | Was ~1.9 s on the iGPU; same model, now CUDA |
+| Reranker turn | **~250 ms** warm, ~1.6 s cold (measured 2026-08-15, 5 runs) | Was ~1.9 s on the iGPU; same model, now CUDA |
 | Tool overhead | UNMEASURED on Spark | Was ~15–25% of a chat turn |
 | Cold start (vLLM) | **813 s** | FlashInfer JIT; torch.compile is only 9.5 s of it |
 | Warm start (vLLM) | **~3 min** | Reuses `~/.cache/flashinfer` + `~/.cache/vllm` |

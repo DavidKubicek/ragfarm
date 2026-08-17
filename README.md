@@ -78,7 +78,7 @@ fusion → cross-encoder rerank → floor + Kneedle chord-distance gate → top-
 same-section expansion. Measured per stage:
 
 ```
-embed 183 ms · fuse 15 ms · rerank 297 ms · expand 6 ms
+embed 13 ms · fuse 15 ms · rerank 250 ms · expand <1 ms      (warm; first call after idle ~1.6 s)
 ```
 
 The reranker is the expensive stage and decides whether the model sees the right

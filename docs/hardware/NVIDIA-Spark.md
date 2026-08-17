@@ -65,7 +65,7 @@ bandwidth) where dense models breathe.
   the F5X runs today; it stays fine for single-stream and for the reranker). Per
   ADR-0003 the durable layer is HW-agnostic — model + rerank device swap without
   re-architecture; only endpoints/process topology change.
-- CUDA rerank makes ADR-0008's ~1.9 s iGPU cross-encoder ~0.2 s, which is what makes
+- CUDA rerank made ADR-0008's ~1.9 s iGPU cross-encoder ~0.25 s (measured 2026-08-15), which is what makes
   ADR-0010's floor calibration (a wide query sweep) cheap.
 - VL forward passes (ADR-0009 vision; ADR-0012 caption/OCR ingest) are compute-shaped,
   so they use this box well — unlike bandwidth-bound decode.

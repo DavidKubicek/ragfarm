@@ -1,0 +1,16 @@
+{
+  "measured": "2026-08-15",
+  "host": "DGX Spark (GB10)",
+  "how": "POST :8000/rag/search_corpus, query 'firewall pravidla pro host leadb229p', k=8, five consecutive runs; figures are the service's own _timing_ms",
+  "cold_first_call_rerank_ms": 1610.1,
+  "warm_runs_ms": [
+    {"embed": 13.2, "fuse": 14.3, "rerank": 265.6, "expand": 0.0},
+    {"embed": 13.7, "fuse": 17.8, "rerank": 252.7, "expand": 0.0},
+    {"embed": 13.2, "fuse": 14.5, "rerank": 251.5, "expand": 0.0},
+    {"embed": 14.4, "fuse": 14.6, "rerank": 248.5, "expand": 0.0},
+    {"embed": 13.4, "fuse": 13.2, "rerank": 253.8, "expand": 0.0}
+  ],
+  "gate": {"in": 40, "floor_drop": 0, "kneedle_cut": 14, "kneedle_d": 0.605, "out": 8},
+  "supersedes": "The figures previously quoted in README, the introduction and the retrieval diagram were embed 183 ms / rerank 297 ms / expand 6 ms. Embed 183 and expand 6 were AMD-era numbers carried forward unchecked; rerank 297 came from the 2026-08-07 report. All three are now replaced by measurement on the current stack.",
+  "note": "The first call after an idle period costs ~1.6 s in the reranker. Steady state is ~250 ms. Quote the warm figure and say the cold one exists."
+}

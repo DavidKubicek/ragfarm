@@ -71,7 +71,7 @@ rather than parameter count, and Chapter 4 turns it into priced options.
 **3. Retrieval tuned from stock BGE-M3 to a domain-adapted hybrid.** Dense
 (1024-dim) plus native sparse, fused with Reciprocal Rank Fusion, re-ranked by a
 `bge-reranker-v2-m3` cross-encoder, then cut by a floor plus a Kneedle
-chord-distance gate. The reranker is the most expensive stage at ~297 ms and
+chord-distance gate. The reranker is the most expensive stage at ~250 ms and
 decides whether the model receives the right passages at all — which is why it
 is never shrunk to buy latency. Also custom: broad-in/narrow-out chunking tuned
 for structured XLSX and Confluence-style prose, and an XLSX table parser that
